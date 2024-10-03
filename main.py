@@ -16,8 +16,6 @@ import numpy as np
 #     # map point on unit sphere to analogy normal
 
 
-
-
 # def spherical_parametrization():
 #   pass
 
@@ -25,7 +23,7 @@ import numpy as np
 # def calc_target_normal(input_normals, analogy_normals):
 #   # input object normal -> unit sphere normal -> analogy object normal
 #   nvertices, _ = input_normals
-#   for 
+#   for
 
 #   target_normal = None
 #   min_distance = float("inf")
@@ -38,13 +36,30 @@ import numpy as np
 #   return target_normal
 
 
+class Object:
+  def __init__(self, vertices, faces, vertex_normals, face_normals, face_areas, vertex_neighbors):
+    self.vertices = vertices
+    self.normals = vertex_normals
+    self.faces = faces
+    self.neighbors = []
+
+    self._face_normals = face_normals
+    self._face_areas = face_areas
+
+
 def load_obj(path):
   vertices = []  # |V| x 3
   faces = []  # |F| x 3 (intended for triangular meshes)
   vertex_normals = []  # |V| x 3 (vertex normals computed as area-weighted face normals)
   face_normals = []  # |F| x 3
   face_areas = []  # |F| x 1                                     MAYBE use as crude Voronoi area approx
+  face_angles = []  # |F| x 3 (interior angle at vertex i, j, k of this face)
   vertex_neighbor_edges = []  # |V| x |V| x |Nk|
+  weights = []  # |V| x |Nk| x |Nk|
+
+  # some of these are one-time computations, which should be separated into other methods?
+  # you load faces and vertices, which are the minimum info needed to define a mesh
+  # then everything you calculate dynamically
 
   with open(path, "r") as file:
     for line in file:
@@ -74,42 +89,108 @@ def load_obj(path):
       face = faces[i, :]
       pi, pj, pk = vertices[face[0]], vertices[face[1]], vertices[face[2]]
 
-      face_normal = np.cross(pi - pj, pk - pj)  # TODO: check
-      face_normal /= np.linalg.norm(face_normal)
+      e_ij = pj - pi
+      e_jk = pk - pj
+      e_ki = pi - pk
+
+      cross_prod = np.cross(-e_ij, e_jk)
+      face_normal = cross_prod / np.linalg.norm(cross_prod)
       face_normals.append(face_normal)
 
-      face_area = np.linalg.norm(np.cross(pi - pj, pk - pj)) / 2
+      face_area = np.linalg.norm(cross_prod) / 2
       face_areas.append(face_area)
+
+      alpha_k = np.arccos(np.dot(-e_jk, e_ki) / (np.linalg.norm(e_jk) * np.linalg.norm(e_ki)))
+      alpha_i = np.arccos(np.dot(-e_ki, e_ij) / (np.linalg.norm(e_ki) * np.linalg.norm(e_ij)))
+      alpha_j = np.arccos(np.dot(-e_ij, e_jk) / (np.linalg.norm(e_ij) * np.linalg.norm(e_jk)))
+
+      face_angles.append([alpha_i, alpha_j, alpha_k])
 
     face_normals = np.array(face_normals)
     face_areas = np.array(face_areas)
+    face_angles = np.array(face_angles)
 
+    g_weights = []
     for i in range(nvertices):
       vertex_normal = np.zeros((3,))
 
+      # maybe also Voronoi area here
       edges = []
+      weights = []
       for j in range(nfaces):
         face = faces[j, :]
+        angles = face_angles[j, :]
+        voronoi = 0
         if i in face:
           vertex_normal += face_normals[j] * face_areas[j]
 
           # DIRECTED EDGES (shared edges between faces counted twice)
+          # tip - tail
           _i, _j, _k = face
-          edgeji = np.zeros((nvertices,))
-          edgeji[_j] = 1
-          edgeji[_i] = -1
-          edges.append(edgeji)
+          alpha_i, alpha_j, alpha_k = angles
 
-          edgekj = np.zeros((nvertices,))
-          edgekj[_k] = 1
-          edgekj[_j] = -1
-          edges.append(edgekj)
-          
-          edgeik = np.zeros((nvertices,))
-          edgeik[_i] = 1
-          edgeik[_k] = -1
-          edges.append(edgeik)
-        
+          edge_ij = np.zeros((nvertices,))
+          edge_ij[_j] = 1
+          edge_ij[_i] = -1
+          edges.append(edge_ij)
+          alpha_ij = alpha_k
+          beta_ij = None
+          for k in range(nfaces):
+            if _i == faces[k, 0] and _j == faces[k, 2]:
+              beta_ij = face_angles[k, 1]
+              break
+            elif _i == faces[k, 1] and _j == faces[k, 0]:
+              beta_ij = face_angles[k, 2]
+              break
+            elif _i == faces[k, 2] and _j == faces[k, 1]:
+              beta_ij = face_angles[k, 0]
+              break
+          weight_ij = (1 / np.tan(alpha_ij) + 1 / np.tan(beta_ij)) / 2
+          weights.append(weight_ij)
+
+          edge_jk = np.zeros((nvertices,))
+          edge_jk[_k] = 1
+          edge_jk[_j] = -1
+          edges.append(edge_jk)
+          alpha_jk = alpha_i
+          beta_jk = None
+          for k in range(nfaces):
+            if _j == faces[k, 2] and _k == faces[k, 1]:
+              beta_jk = face_angles[k, 0]
+              break
+            elif _j == faces[k, 0] and _k == faces[k, 2]:
+              beta_jk = face_angles[k, 1]
+              break
+            elif _j == faces[k, 1] and _k == faces[k, 0]:
+              beta_jk = face_angles[k, 2]
+              break
+          weight_jk = (1 / np.tan(alpha_jk) + 1 / np.tan(beta_jk)) / 2
+          weights.append(weight_jk)
+
+          edge_ki = np.zeros((nvertices,))
+          edge_ki[_i] = 1
+          edge_ki[_k] = -1
+          edges.append(edge_ki)
+          alpha_ki = alpha_j
+          beta_ki = None
+          for k in range(nfaces):
+            if _k == faces[k, 2] and _i == faces[k, 1]:
+              beta_ki = face_angles[k, 0]
+              break
+            elif _k == faces[k, 0] and _i == faces[k, 2]:
+              beta_ki = face_angles[k, 1]
+              break
+            elif _k == faces[k, 1] and _i == faces[k, 0]:
+              beta_ki = face_angles[k, 2]
+              break
+          weight_ki = (1 / np.tan(alpha_ki) + 1 / np.tan(beta_ki)) / 2
+          weights.append(weight_ki)
+
+          voronoi 
+
+      weights = np.diag(weights)
+      g_weights.append(weights)
+
       vertex_normal /= np.linalg.norm(vertex_normal)
       vertex_normals.append(vertex_normal)
 
@@ -122,12 +203,20 @@ def load_obj(path):
 
     # the only thing that needs to be recalculated is E'
 
-    return vertices, faces, vertex_normals, face_normals, face_areas, vertex_neighbor_edges
+    return (
+      vertices,
+      faces,
+      vertex_normals,
+      face_normals,
+      face_areas,
+      vertex_neighbor_edges,
+      face_angles,
+      g_weights,
+    )
 
 
 def save_obj(path, vertices, faces, normals, neighbors):
   pass
-
 
 
 # idea - |V| x |V| incidence matrix that picks out |Nk| for each vert --> actually no this doesn't work as maybe |Nk| > |V|
@@ -135,8 +224,9 @@ def save_obj(path, vertices, faces, normals, neighbors):
 # (V^T)Ak - |3| x |Nk| - edge vectors
 
 
-
-vertices, faces, vertex_normals, face_normals, face_areas, neighbors = load_obj("./assets/cube.obj")
+vertices, faces, vertex_normals, face_normals, face_areas, neighbors, face_angles, weights = (
+  load_obj("./assets/cube.obj")
+)
 # input_vertices, input_faces, input_normals, input_neighbors = load_obj("./assets/cube.obj")
 # V_prime = np.copy(V)
 print(vertices)
@@ -144,15 +234,25 @@ print(faces)
 # print(face_normals)
 # print(vertex_normals)
 
-example_incidence = (vertices.T @ neighbors[0])
-print(example_incidence.shape)
+example_incidence = vertices.T @ neighbors[0]
+print(neighbors[0].shape)
 
-# [[ 2.  0. -2.  0.  2. -2.  0.  0.  0.  0.  0.  0.  2.  0. -2.  2. -2.  0.]
-#  [ 2. -2.  0.  2.  0. -2.  0.  2. -2.  2.  0. -2.  0.  0.  0.  0.  0.  0.]
-#  [ 0.  0.  0.  0.  0.  0.  2.  0. -2.  2. -2.  0.  0.  2. -2.  2.  0. -2.]]
-#    1   2   3   4   5   1   6   2   7   7   6   4   3   8   9   9   5   8  
-# (it's a cube so every edge is double-counted :/)
+# [[-1.  0.  1. -1.  0.  1. -1.  0.  1. -1.  0.  1. -1.  0.  1. -1.  0.  1.]
+#  [ 0.  1. -1.  0.  0.  0.  0.  0.  0.  0.  0.  0.  1. -1.  0.  0.  0.  0.]
+#  [ 1. -1.  0.  0.  1. -1.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.]
+#  [ 0.  0.  0.  1. -1.  0.  0.  0.  0.  0.  1. -1.  0.  0.  0.  0.  0.  0.]
+#  [ 0.  0.  0.  0.  0.  0.  1. -1.  0.  0.  0.  0.  0.  0.  0.  0.  1. -1.]
+#  [ 0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  1. -1.  1. -1.  0.]
+#  [ 0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.  0.]
+#  [ 0.  0.  0.  0.  0.  0.  0.  1. -1.  1. -1.  0.  0.  0.  0.  0.  0.  0.]]
+#    1  [2]  3   4  [5]  1   6  [7]  8   8  [9]  4   3 [10] 11  11 [12]  6
+# 6 triangles incident to this vertex
+# 18 edges -> 12 repeated (but in different directions), 6 not repeated
 
+print(weights[0].shape)
+
+# weights w_ij = 1 / 2 * (cot alpha + cot beta)
+#
 
 
 # step 1: map unit sphere normal to analogy shape FACE normal
@@ -160,11 +260,15 @@ print(example_incidence.shape)
 # step 3:
 
 
-# input: analogy shape, input shape
-# output: output shape
-# probably need a half edge structure to get "spoke" and "rim" edges of a vertex
-# actually you can use an index array too
-# half edge structure restricts us to triangular meshes, manifold surfaces (good enough restriction)
+# MIXED VORONOI CELL AREA
+# 1-ring neighborhood
+# acute -> circumcenter (perpendicular bisectors intersect at circumcenter inside the triangle)
+# ...
+# obtuse -> centroid (circumcetner outside the triangle, so take area of barycenter, which is 1/3 area?)
+#
+# barycenter = (i + j + k)/ 3
+# np.linalg.norm(np.cross(e_jk, barycenter - j)) / 2
+
 # Voronoi area of a triangular mesh can be calculated with:
 # for each triangle T:
 #   if acute:
@@ -207,7 +311,6 @@ print(example_incidence.shape)
 # Taking the SVD is an independent process so just do it in parallel.
 
 # A_k matrix:
-
 
 
 # compute N~_A'
