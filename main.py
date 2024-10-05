@@ -65,8 +65,7 @@ class Optimizer:
     #
     # Good to add in README
     # Since Q (L in the other paper) is symmetric positive-definite, ve definite, the sparse
-    # Cholesky factorization with fill-reducing reordering is an efficient choice (Q = LL^T, where
-    # L is a lower triangular matrix)
+    # Cholesky factorization with fill-reducing reordering is an efficient choice
     # Step 1: Perform Cholesky factorization: A = L L^T
     # L = np.linalg.cholesky(A)
     # Step 2: Solve Ly = b using forward substitution
@@ -83,7 +82,28 @@ class Optimizer:
     Q = np.zeros((nverts, nverts))
     for k in range(nverts):
       Q += A[k] @ np.diag(W[k]) @ A[k].T
+
+    # print(Q)
+    print("DETERMINANT")
+    print(np.linalg.det(Q))
     L = np.linalg.cholesky(Q)  # might have to find SPARSE solver
+
+    C = self._calc_vert_cots(self._input_verts, self._input_faces)
+    # self._calc_edge_cots
+    # self._calc_edge_weights
+
+    # # Q is the cotangent Laplacian (try manually)
+    # # Tesselation edges are zeroed out by cot weights
+    # Q = np.zeros((nverts, nverts))
+    # for i in range(nverts):
+    #   for j in range(nverts):
+    #     if j == i:
+    #       continue
+    #     Q[i, j] = -(C[i, j] + C[j, i]) / 2
+    # for i in range(nverts):
+    #   Q[i, i] = -np.sum(Q[:, i], axis=0)
+    # print('MANUAL Q')
+    # print(Q)
 
     assert np.all(np.allclose(Q, Q.T))  # Q is a |V|-by-|V| symmetric matrix
     # still not sure why negative
@@ -92,40 +112,33 @@ class Optimizer:
     for k in range(nverts):
       K[3 * k : 3 * (k + 1), :] = self._input_verts.T @ A[k] @ np.diag(W[k]) @ A[k].T
 
-    R = np.hstack([np.eye(3)] * nverts)  # R is a ||-by-|9V| matrix concatenating the rotations
-    np.set_printoptions(suppress=True)
+    R = np.hstack([np.eye(3)] * nverts)  # R is a 3-by-|3V| matrix concatenating the rotations
 
     for __ in range(100):
       # local-step
-      # for k in range(nverts):
-      #   input_edges = np.hstack(
-      #     [
-      #       self._input_verts.T @ A[k],
-      #       input_vert_normals[k, :].reshape((3, 1)),
-      #     ]
-      #   )
-      #   output_edges = np.hstack(
-      #     [
-      #       self._output_verts.T @ A[k],
-      #       output_vert_normals[k, :].reshape((3, 1)),
-      #     ]
-      #   )
-      #   weights = np.diag(
-      #     np.append(input_vert_neighborhood_weights[k], factor * input_vert_areas[k])
-      #   )
+      for k in range(nverts):
+        input_edges = np.hstack(
+          [
+            self._input_verts.T @ A[k],
+            input_vert_normals[k, :].reshape((3, 1)),
+          ]
+        )
+        output_edges = np.hstack(
+          [
+            self._output_verts.T @ A[k],
+            output_vert_normals[k, :].reshape((3, 1)),
+          ]
+        )
+        weights = np.diag(np.append(W[k], factor * input_vert_areas[k]))
 
-      #   U, _, Vt = np.linalg.svd(input_edges @ weights @ output_edges.T)
-      #   rotation = Vt.T @ U.T
-      #   if np.linalg.det(rotation) < 0:
-      #     Vt[0, :] *= -1
-      #     rotation = Vt.T @ U.T
-      #   rotations[:, 3 * k : 3 * (k + 1)] = rotation
+        U, _, Vt = np.linalg.svd(input_edges @ weights @ output_edges.T)
+        rotation = Vt.T @ U.T
+        if np.linalg.det(rotation) < 0:
+          Vt[0, :] *= -1
+          rotation = Vt.T @ U.T
+        R[:, 3 * k : 3 * (k + 1)] = rotation
 
-      # try:
-      #   assert np.all(np.isclose(rotation, np.eye(3)))
-      # except AssertionError:
-      #   print(np.round(rotation, decimals=4))
-      #   return
+        # assert np.all(np.isclose(rotation, np.eye(3)))
 
       # debugging global step -- factor is 0, so just minimize ARAP
       # ideal rotation should be no rotation (identity matrix)
@@ -134,29 +147,35 @@ class Optimizer:
       self._output_verts = np.linalg.solve(L.T, np.linalg.solve(L, K.T @ R.T))
       assert np.all(np.isclose(Q @ self._output_verts, K.T @ R.T))
 
-      # print("input")
+      # print(self._output_verts)
       # print(self._input_verts)
-      # print("output")
-      # print(temp)
-      # print("inverse")
-      # print((Q_inv @ K.T @ R.T))
 
-      try:
-        assert np.all(np.isclose(self._output_verts, self._input_verts))
-      except AssertionError:
-        print(self._output_verts)
-        print(self._input_verts)
-        return
+      # solver solution is really similar to the null solution -- numerical problems likely
+      # constant is -288.0 <-- minimum achievable
+      # but solver finds a different solution which also produces -288.0
+      # there are multiple solutions here...
+      # det(Q) is really close to 0, which is causing instability
+      # So is there a mistake in Q or is it just the input shape?
+      # cotan Laplacian -- why is this different?
 
       energy = np.trace(self._output_verts.T @ Q @ self._output_verts) - 2 * np.trace(
         R @ K @ self._output_verts
       )  # why is this neg? -- maybe because there's no constant
       # print(energy)
 
-      # when factor = 0, vertices shouldn't move
-      # use vn to fix order of verts?
+      energy = 0
+      for k in range(nverts):
+        E = self._input_verts.T @ A[k]
+        E_prime = self._output_verts.T @ A[k]
+        for _ in range(A[k].shape[1]):
+          energy += W[k][_] * np.linalg.norm(
+            R[:, 3 * k : 3 * (k + 1)] @ E[:, _] - E_prime[:, _]
+          ) ** 2 - W[k][_] * (R[:, 3 * k : 3 * (k + 1)] @ E[:, _]).T @ (
+            R[:, 3 * k : 3 * (k + 1)] @ E[:, _]
+          )
+      # print(energy)
 
-    self._save_obj(self._output_path, self._output_verts, self._output_faces, output_vert_normals)
+    self._save_obj(self._output_path, self._output_verts, self._output_faces)
 
   def _calc_output_vert_normals(self, analogy_vert_normals, input_vert_normals):
     input_nverts, _ = input_vert_normals.shape
@@ -195,19 +214,14 @@ class Optimizer:
 
   # ACTUALLY QUESTION -- IS THERE ANYTHING THAT NEEDS THIS TO BE A WATERTIGHT MESH???
 
-  def _save_obj(self, path, verts, faces, vert_normals=[]):
+  def _save_obj(self, path, verts, faces):
     lines = []
 
     for vert in verts:
       lines.append(f"v {vert[0]} {vert[1]} {vert[2]}")
 
-    for vert_normal in vert_normals:
-      lines.append(f"vn {vert_normal[0]} {vert_normal[1]} {vert_normal[2]}")
-
     for face in faces:
-      lines.append(
-        f"f {face[0] + 1}//{face[0] + 1} {face[1] + 1}//{face[1] + 1} {face[2] + 1}//{face[2] + 1}"
-      )
+      lines.append(f"f {face[0] + 1} {face[1] + 1} {face[2] + 1}")
 
     with open(path, "w") as file:
       file.write("\n".join(lines))
@@ -349,5 +363,7 @@ class Optimizer:
 
 
 if __name__ == "__main__":
-  optim = Optimizer("./assets/tetrahedron.obj", "./assets/cube.obj", "./out.obj")
-  optim.run(0)
+  optim = Optimizer("./assets/tetrahedron.obj", "./assets/sphere.obj", "./out.obj")
+  optim.run(10)
+
+  # maybe a constraint should be locking in a single vertex?
