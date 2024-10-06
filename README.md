@@ -22,3 +22,6 @@ https://mobile.rodolphe-vaillant.fr/entry/101/definition-laplacian-matrix-for-tr
     # x = np.linalg.solve(L.T, y)
     # Factorization is more numerically stable and computationally efficient than solving system
     # via x = A^-1 b
+
+
+TODO: Voronoi area, mean curvature flow, cupy, transfer texture coords

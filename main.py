@@ -1,6 +1,7 @@
 import numpy as np
-from scipy.sparse import csc_array
+from scipy.sparse import csr_array, csc_array, lil_array, diags
 from sksparse.cholmod import cholesky
+from tqdm import tqdm
 
 # ASSUMPTION: MANIFOLD TRIANGLE MESHES
 
@@ -28,20 +29,21 @@ class Stylizer:
     )
     target_vert_normals = self._calc_target_vert_normals(analogy_face_normals, input_vert_normals)
 
+    print('Calculating Q...')
     # kinda slow: sparse matrix here
-    Q = np.zeros((input_nverts, input_nverts))
+    Q = csr_array((input_nverts, input_nverts))
     for k in range(input_nverts):
       Q += (
-        input_vert_neighbors[k]
-        @ np.diag(input_vert_neighbor_weights[k])
-        @ input_vert_neighbors[k].T
+        input_vert_neighbors[k] @ diags(input_vert_neighbor_weights[k]) @ input_vert_neighbors[k].T
       )
 
     # assert np.all(np.allclose(Q, Q.T))  # Q is a |V|-by-|V| symmetric matrix
     # assert positive eigenvalues
 
-    factor = cholesky(csc_array(Q), ordering_method="amd")
+    print('Cholesky decomp...')
+    factor = cholesky(Q, ordering_method="amd")
 
+    print('Calculating K...')
     # K is a |9V|-by-|3V| matrix stacking the constant terms
     K = np.zeros((input_nverts * 3, input_nverts))
     for k in range(input_nverts):
@@ -49,14 +51,15 @@ class Stylizer:
       K[3 * k : 3 * (k + 1), :] = (
         input_verts.T
         @ input_vert_neighbors[k]
-        @ np.diag(input_vert_neighbor_weights[k])
+        @ diags(input_vert_neighbor_weights[k])
         @ input_vert_neighbors[k].T
       )
+    # what does this look like? is it dense?
 
     # 3-by-|3V|
     rotations = np.hstack([np.eye(3)] * input_nverts)
 
-    for __ in range(100):
+    for __ in tqdm(range(100)):
       # local step
       self._calc_optimal_rotations(
         rotations,
@@ -122,7 +125,7 @@ class Stylizer:
 
       U, _, Vt = np.linalg.svd(
         input_edges
-        @ np.diag(np.append(input_vert_neighbor_weights[k], strength * input_vert_areas[k]))
+        @ diags(input_vert_neighbor_weights[k] + [strength * input_vert_areas[k]])
         @ output_edges.T
       )
       rotation = Vt.T @ U.T
@@ -243,51 +246,44 @@ class Stylizer:
 
     return vert_normals
 
-  # CORRECT DON'T TOUCH
   def _calc_vert_neighbors(self, verts, faces):
     nverts, _ = verts.shape
 
     vert_cots = self._calc_vert_cots(verts, faces)
 
     # 1-ring neighborhood
-    vert_neighborhood = []
-    vert_neighborhood_weights = []
+    vert_neighbors = []
+    vert_neighbor_weights = []
 
     for v in range(nverts):
-      edges = []
-      weights = []
+      edges_list = []
       for face in faces:
-        if v in face:
-          i, j, k = face
+        if v not in face:
+          continue
+        i, j, k = face
+        edges_list.append((i, j))
+        edges_list.append((j, k))
+        edges_list.append((k, i))
 
-          edge_ij = np.zeros((nverts,))
-          edge_ij[i] = -1
-          edge_ij[j] = 1
-          edges.append(edge_ij)
-          weights.append((vert_cots[i, j] + vert_cots[j, i]) / 2)
+      nedges = len(edges_list)
 
-          edge_jk = np.zeros((nverts,))
-          edge_jk[j] = -1
-          edge_jk[k] = 1
-          edges.append(edge_jk)
-          weights.append((vert_cots[j, k] + vert_cots[k, j]) / 2)
+      edges = lil_array((nverts, nedges))
+      weights = []
+      for i, edge in enumerate(edges_list):
+        tail, tip = edge
+        edges[tail, i] = -1
+        edges[tip, i] = 1
+        weights.append((vert_cots[tail, tip] + vert_cots[tip, tail]) / 2)
 
-          edge_ki = np.zeros((nverts,))
-          edge_ki[k] = -1
-          edge_ki[i] = 1
-          edges.append(edge_ki)
-          weights.append((vert_cots[k, i] + vert_cots[i, k]) / 2)
+      vert_neighbors.append(csr_array(edges))
+      vert_neighbor_weights.append(weights)
 
-      vert_neighborhood.append(np.array(edges).T)
-      vert_neighborhood_weights.append(np.array(weights))
+    return vert_neighbors, vert_neighbor_weights
 
-    return vert_neighborhood, vert_neighborhood_weights
-
-  # CORRECT DON'T TOUCH
   def _calc_vert_cots(self, verts, faces):
     nverts, _ = verts.shape
 
-    vert_cots = np.zeros((nverts, nverts))
+    vert_cots = lil_array((nverts, nverts))
 
     for face in faces:
       i, j, k = face
@@ -307,7 +303,7 @@ class Stylizer:
 if __name__ == "__main__":
   # maybe there should be a preprocessor that makes meshes Delaunay
   stylizer = Stylizer()
-  stylizer.run("./assets/tetrahedron.obj", "./assets/sphere.obj", "./out.obj", 1000)
+  stylizer.run("./assets/cube.obj", "./assets/spot/spot_triangulated.obj", "./out.obj", 10)
 
   # maybe a constraint should be locking in a single vertex?
 
@@ -320,3 +316,6 @@ if __name__ == "__main__":
   # In Laplacian smoothing, x.T L x is minimized.
 
   # x.TLx = sum_{i,j} w_ij(x_i - x_j)^2
+
+  # csr_array A --> A v
+  # csc_array A --> v A or A.T v
