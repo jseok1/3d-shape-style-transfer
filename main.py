@@ -1,5 +1,6 @@
 import numpy as np
-
+from scipy.sparse import csc_array
+from sksparse.cholmod import cholesky
 # # ASSUMPTION: MANIFOLD TRIANGLE MESHES
 
 # # 1. position on input to position on unit sphere (Gauss map; using normals)
@@ -63,18 +64,7 @@ class Optimizer:
     # F is a |F|-by-3 matrix of face lists
     # V' is a |V|-by-3 matrix of deformed vertices
     #
-    # Good to add in README
-    # Since Q (L in the other paper) is symmetric positive-definite, ve definite, the sparse
-    # Cholesky factorization with fill-reducing reordering is an efficient choice
-    # Step 1: Perform Cholesky factorization: A = L L^T
-    # L = np.linalg.cholesky(A)
-    # Step 2: Solve Ly = b using forward substitution
-    # y = np.linalg.solve(L, b)
-    # Step 3: Solve L^T x = y using back substitution
-    # x = np.linalg.solve(L.T, y)
-    # Factorization is more numerically stable and computationally efficient than solving system
-    # via x = A^-1 b
-
+    
     A, W = self._calc_vert_neighborhoods(self._input_verts, self._input_faces)
     # A[k] is a |V|-by-|Nk| directed incidence matrix such that Nk is V.T @ A[k]
 
@@ -83,29 +73,18 @@ class Optimizer:
     for k in range(nverts):
       Q += A[k] @ np.diag(W[k]) @ A[k].T
 
-    # print(Q)
-    print("DETERMINANT")
-    print(np.linalg.det(Q))
-    L = np.linalg.cholesky(Q)  # might have to find SPARSE solver
+
+    factor_ = cholesky(csc_array(Q), ordering_method='amd')
+    L = factor_.L()
+    L = L.toarray()
+
+    # L = np.linalg.cholesky(Q)
 
     C = self._calc_vert_cots(self._input_verts, self._input_faces)
     # self._calc_edge_cots
     # self._calc_edge_weights
 
-    # # Q is the cotangent Laplacian (try manually)
-    # # Tesselation edges are zeroed out by cot weights
-    # Q = np.zeros((nverts, nverts))
-    # for i in range(nverts):
-    #   for j in range(nverts):
-    #     if j == i:
-    #       continue
-    #     Q[i, j] = -(C[i, j] + C[j, i]) / 2
-    # for i in range(nverts):
-    #   Q[i, i] = -np.sum(Q[:, i], axis=0)
-    # print('MANUAL Q')
-    # print(Q)
-
-    assert np.all(np.allclose(Q, Q.T))  # Q is a |V|-by-|V| symmetric matrix
+    # assert np.all(np.allclose(Q, Q.T))  # Q is a |V|-by-|V| symmetric matrix
     # still not sure why negative
 
     K = np.zeros((nverts * 3, nverts))  # K is a |9V|-by-|3V| matrix stacking the constant terms
@@ -144,8 +123,9 @@ class Optimizer:
       # ideal rotation should be no rotation (identity matrix)
 
       # global step
-      self._output_verts = np.linalg.solve(L.T, np.linalg.solve(L, K.T @ R.T))
-      assert np.all(np.isclose(Q @ self._output_verts, K.T @ R.T))
+      # self._output_verts = np.linalg.solve(L.T, np.linalg.solve(L, K.T @ R.T))
+      self._output_verts = factor_(K.T @ R.T)
+      # assert np.all(np.isclose(Q @ self._output_verts, K.T @ R.T))
 
       # print(self._output_verts)
       # print(self._input_verts)
@@ -158,9 +138,9 @@ class Optimizer:
       # So is there a mistake in Q or is it just the input shape?
       # cotan Laplacian -- why is this different?
 
-      energy = np.trace(self._output_verts.T @ Q @ self._output_verts) - 2 * np.trace(
-        R @ K @ self._output_verts
-      )  # why is this neg? -- maybe because there's no constant
+      # energy = np.trace(self._output_verts.T @ Q @ self._output_verts) - 2 * np.trace(
+      #   R @ K @ self._output_verts
+      # )  # why is this neg? -- maybe because there's no constant
       # print(energy)
 
       energy = 0
@@ -363,7 +343,19 @@ class Optimizer:
 
 
 if __name__ == "__main__":
+  # maybe there should be a preprocessor that makes meshes Delaunay
   optim = Optimizer("./assets/tetrahedron.obj", "./assets/sphere.obj", "./out.obj")
-  optim.run(10)
+  optim.run(1000)
 
   # maybe a constraint should be locking in a single vertex?
+
+
+  # a square matrix is PSD iff it's symmetric and its eigenvalues are non-negative
+  
+  # 
+  # L encodes the connectivity and angles of the mesh geometry
+  # x.T L x describes a scalar smoothness measure of the function x (e.g. position) across the mesh
+  # If x is position, then x.TLx measures how much the vertices' positions deviate from their neighbors.
+  # In Laplacian smoothing, x.T L x is minimized.
+
+  # x.TLx = sum_{i,j} w_ij(x_i - x_j)^2
