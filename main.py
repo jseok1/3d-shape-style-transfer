@@ -1,172 +1,138 @@
 import numpy as np
 from scipy.sparse import csc_array
 from sksparse.cholmod import cholesky
-# # ASSUMPTION: MANIFOLD TRIANGLE MESHES
+
+# ASSUMPTION: MANIFOLD TRIANGLE MESHES
 
 # # 1. position on input to position on unit sphere (Gauss map; using normals)
 # # 2. position on unit sphere to analogy normal
 
-# def nearest_normal(input_normals, analogy_normals):
-#   # given a position on the unit sphere, what's the analogous normal?
-#   nvertices, _ = input_normals.shape
 
-#   for i in range(nvertices):
-#     # map vertex in input to point on unit sphere (Gauss map)
-#     position = input_normals[i] / np.linalg.norm(input_normals[i])
+class Stylizer:
+  def run(self, analogy_path, input_path, output_path, strength):
+    analogy_verts, analogy_faces = self._load_obj(analogy_path)
+    input_verts, input_faces = self._load_obj(input_path)
+    output_verts = np.copy(input_verts)
 
-#     # map point on unit sphere to analogy normal
+    input_nverts, _ = input_verts.shape
 
+    analogy_face_normals = self._calc_face_normals(analogy_verts, analogy_faces)
+    input_face_normals = self._calc_face_normals(input_verts, input_faces)
+    input_face_areas = self._calc_face_areas(input_verts, input_faces)
+    input_vert_normals = self._calc_vert_normals(
+      input_verts, input_faces, input_face_normals, input_face_areas
+    )
+    input_vert_areas = self._calc_vert_areas(input_verts, input_faces, input_face_areas)
+    input_vert_neighbors, input_vert_neighbor_weights = self._calc_vert_neighbors(
+      input_verts, input_faces
+    )
+    target_vert_normals = self._calc_target_vert_normals(analogy_face_normals, input_vert_normals)
 
-# def spherical_parametrization():
-#   pass
-
-
-# def calc_target_normal(input_normals, analogy_normals):
-#   # input object normal -> unit sphere normal -> analogy object normal
-#   nvertices, _ = input_normals
-#   for
-
-#   target_normal = None
-#   min_distance = float("inf")
-#   for analogy_normal in analogy_normals:
-#     distance = np.abs(np.dot(normal, analogy_normal))
-#     if distance < min_distance:
-#       min_distance = distance
-#       target_normal = analogy_normal
-
-#   return target_normal
-
-
-class Optimizer:
-  def __init__(self, analogy_path, input_path, output_path):
-    self._analogy_path = analogy_path
-    self._input_path = input_path
-    self._output_path = output_path
-
-    self._analogy_verts, self._analogy_faces = self._load_obj(analogy_path)
-    self._input_verts, self._input_faces = self._load_obj(input_path)
-    self._output_verts, self._output_faces = np.copy(self._input_verts), np.copy(self._input_faces)
-
-  def run(self, factor):
-    nverts, _ = self._input_verts.shape
-
-    # NOTE: face normals for analogy shape, vertex normals for input shape
-    analogy_face_normals = self._calc_face_normals(self._analogy_verts, self._analogy_faces)
-    input_vert_normals = self._calc_vert_normals(self._input_verts, self._input_faces)
-
-    # "target" vert normals
-    output_vert_normals = self._calc_output_vert_normals(analogy_face_normals, input_vert_normals)
-
-    input_vert_areas = self._calc_vert_areas(self._input_verts, self._input_faces)
-
-    # T = {tk} is a set of target normals for each vertex k
-    # V is a |V|-by-3 matrix of rest vertices
-    # F is a |F|-by-3 matrix of face lists
-    # V' is a |V|-by-3 matrix of deformed vertices
-    #
-    
-    A, W = self._calc_vert_neighborhoods(self._input_verts, self._input_faces)
-    # A[k] is a |V|-by-|Nk| directed incidence matrix such that Nk is V.T @ A[k]
-
-    # there might be error here?
-    Q = np.zeros((nverts, nverts))
-    for k in range(nverts):
-      Q += A[k] @ np.diag(W[k]) @ A[k].T
-
-
-    factor_ = cholesky(csc_array(Q), ordering_method='amd')
-    L = factor_.L()
-    L = L.toarray()
-
-    # L = np.linalg.cholesky(Q)
-
-    C = self._calc_vert_cots(self._input_verts, self._input_faces)
-    # self._calc_edge_cots
-    # self._calc_edge_weights
+    # kinda slow: sparse matrix here
+    Q = np.zeros((input_nverts, input_nverts))
+    for k in range(input_nverts):
+      Q += (
+        input_vert_neighbors[k]
+        @ np.diag(input_vert_neighbor_weights[k])
+        @ input_vert_neighbors[k].T
+      )
 
     # assert np.all(np.allclose(Q, Q.T))  # Q is a |V|-by-|V| symmetric matrix
-    # still not sure why negative
+    # assert positive eigenvalues
 
-    K = np.zeros((nverts * 3, nverts))  # K is a |9V|-by-|3V| matrix stacking the constant terms
-    for k in range(nverts):
-      K[3 * k : 3 * (k + 1), :] = self._input_verts.T @ A[k] @ np.diag(W[k]) @ A[k].T
+    factor = cholesky(csc_array(Q), ordering_method="amd")
 
-    R = np.hstack([np.eye(3)] * nverts)  # R is a 3-by-|3V| matrix concatenating the rotations
+    # K is a |9V|-by-|3V| matrix stacking the constant terms
+    K = np.zeros((input_nverts * 3, input_nverts))
+    for k in range(input_nverts):
+      # repeated computation here - can speed up
+      K[3 * k : 3 * (k + 1), :] = (
+        input_verts.T
+        @ input_vert_neighbors[k]
+        @ np.diag(input_vert_neighbor_weights[k])
+        @ input_vert_neighbors[k].T
+      )
+
+    # 3-by-|3V|
+    rotations = np.hstack([np.eye(3)] * input_nverts)
 
     for __ in range(100):
-      # local-step
-      for k in range(nverts):
-        input_edges = np.hstack(
-          [
-            self._input_verts.T @ A[k],
-            input_vert_normals[k, :].reshape((3, 1)),
-          ]
-        )
-        output_edges = np.hstack(
-          [
-            self._output_verts.T @ A[k],
-            output_vert_normals[k, :].reshape((3, 1)),
-          ]
-        )
-        weights = np.diag(np.append(W[k], factor * input_vert_areas[k]))
-
-        U, _, Vt = np.linalg.svd(input_edges @ weights @ output_edges.T)
-        rotation = Vt.T @ U.T
-        if np.linalg.det(rotation) < 0:
-          Vt[0, :] *= -1
-          rotation = Vt.T @ U.T
-        R[:, 3 * k : 3 * (k + 1)] = rotation
-
-        # assert np.all(np.isclose(rotation, np.eye(3)))
-
-      # debugging global step -- factor is 0, so just minimize ARAP
-      # ideal rotation should be no rotation (identity matrix)
+      # local step
+      self._calc_optimal_rotations(
+        rotations,
+        input_verts,
+        output_verts,
+        input_vert_normals,
+        target_vert_normals,
+        input_vert_neighbors,
+        input_vert_neighbor_weights,
+        input_vert_areas,
+        strength,
+      )
 
       # global step
-      # self._output_verts = np.linalg.solve(L.T, np.linalg.solve(L, K.T @ R.T))
-      self._output_verts = factor_(K.T @ R.T)
-      # assert np.all(np.isclose(Q @ self._output_verts, K.T @ R.T))
-
-      # print(self._output_verts)
-      # print(self._input_verts)
-
-      # solver solution is really similar to the null solution -- numerical problems likely
-      # constant is -288.0 <-- minimum achievable
-      # but solver finds a different solution which also produces -288.0
-      # there are multiple solutions here...
-      # det(Q) is really close to 0, which is causing instability
-      # So is there a mistake in Q or is it just the input shape?
-      # cotan Laplacian -- why is this different?
+      self._calc_optimal_output_verts(output_verts, rotations, K, factor)
 
       # energy = np.trace(self._output_verts.T @ Q @ self._output_verts) - 2 * np.trace(
       #   R @ K @ self._output_verts
       # )  # why is this neg? -- maybe because there's no constant
       # print(energy)
 
-      energy = 0
-      for k in range(nverts):
-        E = self._input_verts.T @ A[k]
-        E_prime = self._output_verts.T @ A[k]
-        for _ in range(A[k].shape[1]):
-          energy += W[k][_] * np.linalg.norm(
-            R[:, 3 * k : 3 * (k + 1)] @ E[:, _] - E_prime[:, _]
-          ) ** 2 - W[k][_] * (R[:, 3 * k : 3 * (k + 1)] @ E[:, _]).T @ (
-            R[:, 3 * k : 3 * (k + 1)] @ E[:, _]
-          )
-      # print(energy)
+    self._save_obj(output_path, output_verts, input_faces)
 
-    self._save_obj(self._output_path, self._output_verts, self._output_faces)
-
-  def _calc_output_vert_normals(self, analogy_vert_normals, input_vert_normals):
+  def _calc_target_vert_normals(self, analogy_face_normals, input_vert_normals):
     input_nverts, _ = input_vert_normals.shape
 
-    output_vert_normals = np.zeros_like(input_vert_normals)
+    target_vert_normals = np.zeros((input_nverts, 3))
 
     for i in range(input_nverts):
-      j = np.argmax(np.dot(analogy_vert_normals, input_vert_normals[i, :]))
-      output_vert_normals[i, :] = analogy_vert_normals[j, :]
+      j = np.argmax(np.dot(analogy_face_normals, input_vert_normals[i, :]))
+      target_vert_normals[i, :] = analogy_face_normals[j, :]
 
-    return output_vert_normals
+    return target_vert_normals
+
+  def _calc_optimal_rotations(
+    self,
+    rotations,
+    input_verts,
+    output_verts,
+    input_vert_normals,
+    target_vert_normals,
+    input_vert_neighbors,
+    input_vert_neighbor_weights,
+    input_vert_areas,
+    strength,
+  ):
+    input_nverts, _ = input_verts.shape
+
+    # potential sparse optim, also do in parallel (?)
+    for k in range(input_nverts):
+      input_edges = np.hstack(
+        [
+          input_verts.T @ input_vert_neighbors[k],
+          input_vert_normals[k, :].reshape((3, 1)),
+        ]
+      )
+      output_edges = np.hstack(
+        [
+          output_verts.T @ input_vert_neighbors[k],
+          target_vert_normals[k, :].reshape((3, 1)),
+        ]
+      )
+
+      U, _, Vt = np.linalg.svd(
+        input_edges
+        @ np.diag(np.append(input_vert_neighbor_weights[k], strength * input_vert_areas[k]))
+        @ output_edges.T
+      )
+      rotation = Vt.T @ U.T
+      if np.linalg.det(rotation) < 0:
+        Vt[0, :] *= -1
+        rotation = Vt.T @ U.T
+      rotations[:, 3 * k : 3 * (k + 1)] = rotation
+
+  def _calc_optimal_output_verts(self, output_verts, rotations, K, factor):
+    output_verts[:, :] = factor(K.T @ rotations.T)
 
   def _load_obj(self, path):
     verts = []
@@ -225,11 +191,9 @@ class Optimizer:
     return face_areas
 
   # CORRECT DON'T TOUCH (but TODO: mixed Voronoi area)
-  def _calc_vert_areas(self, verts, faces):
+  def _calc_vert_areas(self, verts, faces, face_areas):
     nverts, _ = verts.shape
     nfaces, _ = faces.shape
-
-    face_areas = self._calc_face_areas(verts, faces)
 
     vert_areas = np.zeros((nverts,))
     for k in range(nverts):
@@ -261,13 +225,11 @@ class Optimizer:
     return face_normals
 
   # CORRECT DON'T TOUCH
-  def _calc_vert_normals(self, verts, faces):
+  def _calc_vert_normals(self, verts, faces, face_normals, face_areas):
     nverts, _ = verts.shape
     nfaces, _ = faces.shape
 
     vert_normals = np.zeros((nverts, 3))
-    face_normals = self._calc_face_normals(verts, faces)
-    face_areas = self._calc_face_areas(verts, faces)
 
     for v in range(nverts):
       vert_normal = np.zeros((3,))
@@ -282,7 +244,7 @@ class Optimizer:
     return vert_normals
 
   # CORRECT DON'T TOUCH
-  def _calc_vert_neighborhoods(self, verts, faces):
+  def _calc_vert_neighbors(self, verts, faces):
     nverts, _ = verts.shape
 
     vert_cots = self._calc_vert_cots(verts, faces)
@@ -344,15 +306,14 @@ class Optimizer:
 
 if __name__ == "__main__":
   # maybe there should be a preprocessor that makes meshes Delaunay
-  optim = Optimizer("./assets/tetrahedron.obj", "./assets/sphere.obj", "./out.obj")
-  optim.run(1000)
+  stylizer = Stylizer()
+  stylizer.run("./assets/tetrahedron.obj", "./assets/sphere.obj", "./out.obj", 1000)
 
   # maybe a constraint should be locking in a single vertex?
 
-
   # a square matrix is PSD iff it's symmetric and its eigenvalues are non-negative
-  
-  # 
+
+  #
   # L encodes the connectivity and angles of the mesh geometry
   # x.T L x describes a scalar smoothness measure of the function x (e.g. position) across the mesh
   # If x is position, then x.TLx measures how much the vertices' positions deviate from their neighbors.
