@@ -22,10 +22,10 @@ class Stylizer:
     input_face_normals = self._calc_face_normals(input_verts, input_faces)
     input_face_areas = self._calc_face_areas(input_verts, input_faces)
     input_vert_normals = self._calc_vert_normals(
-      input_verts, input_faces, vert_neighbor_face_masks, input_face_normals, input_face_areas
+      input_verts, vert_neighbor_face_masks, input_face_normals, input_face_areas
     )
     input_vert_areas = self._calc_vert_areas(
-      input_verts, input_faces, vert_neighbor_face_masks, input_face_areas
+      input_verts, vert_neighbor_face_masks, input_face_areas
     )
 
     output_verts = np.copy(input_verts)
@@ -165,17 +165,16 @@ class Stylizer:
       file.write("\n".join(lines))
 
   def _calc_face_areas(self, verts, faces):
-    verts_ijk = verts[faces]
-    verts_i = verts_ijk[:, 0]
-    verts_j = verts_ijk[:, 1]
-    verts_k = verts_ijk[:, 2]
+    i, j, k = faces[:, 0], faces[:, 1], faces[:, 2]
 
-    face_areas = np.linalg.norm(np.cross(verts_j - verts_i, verts_k - verts_j), axis=1) / 2
+    face_areas = (
+      np.linalg.norm(np.cross(verts[i, :] - verts[j, :], verts[k, :] - verts[j, :]), axis=1) / 2
+    )
 
     return face_areas
 
   # TODO: mixed Voronoi area
-  def _calc_vert_areas(self, verts, faces, vert_neighbor_face_masks, face_areas):
+  def _calc_vert_areas(self, verts, vert_neighbor_face_masks, face_areas):
     nverts, _ = verts.shape
 
     vert_areas = np.zeros((nverts,))
@@ -187,17 +186,14 @@ class Stylizer:
     return vert_areas
 
   def _calc_face_normals(self, verts, faces):
-    verts_ijk = verts[faces]
-    verts_i = verts_ijk[:, 0]
-    verts_j = verts_ijk[:, 1]
-    verts_k = verts_ijk[:, 2]
+    i, j, k = faces[:, 0], faces[:, 1], faces[:, 2]
 
-    face_normals = np.cross(verts_i - verts_j, verts_k - verts_j)
+    face_normals = np.cross(verts[i, :] - verts[j, :], verts[k, :] - verts[j, :])
     face_normals /= np.linalg.norm(face_normals, axis=1).reshape((-1, 1))
 
     return face_normals
 
-  def _calc_vert_normals(self, verts, faces, vert_neighbor_face_masks, face_normals, face_areas):
+  def _calc_vert_normals(self, verts, vert_neighbor_face_masks, face_normals, face_areas):
     nverts, _ = verts.shape
 
     vert_normals = np.zeros((nverts, 3))
@@ -228,7 +224,6 @@ class Stylizer:
 
       vert_neighbor_face_masks.append(csr_array((entries, (y, x)), shape=(nfaces, vert_nfaces)))
 
-    # vert_neighbor_face_masks = np.any(np.arange(nverts).reshape((-1, 1, 1)) == faces, axis=2)
     return vert_neighbor_face_masks
 
   def _calc_vert_neighbor_edge_masks(self, verts, faces, vert_neighbor_face_masks):
@@ -262,35 +257,19 @@ class Stylizer:
 
     edge_cots = np.zeros((nverts, nverts))
 
-    for face in faces:
-      i, j, k = face
-      vert_i, vert_j, vert_k = verts[i, :], verts[j, :], verts[k, :]
-
-      edge_ij = vert_j - vert_i
-      edge_jk = vert_k - vert_j
-      edge_ki = vert_i - vert_k
-
-      edge_cots[i, j] = np.dot(edge_ki, -edge_jk) / np.linalg.norm(np.cross(edge_ki, -edge_jk))
-      edge_cots[j, k] = np.dot(edge_ij, -edge_ki) / np.linalg.norm(np.cross(edge_ij, -edge_ki))
-      edge_cots[k, i] = np.dot(edge_jk, -edge_ij) / np.linalg.norm(np.cross(edge_jk, -edge_ij))
-
-    return edge_cots
-
-    nverts, _ = verts.shape
-
-    vert_cots = np.zeros((nverts, nverts))
-
     i, j, k = faces[:, 0], faces[:, 1], faces[:, 2]
 
-    vert_cots[i, j] = np.dot(verts[i, :] - verts[k, :], verts[j, :] - verts[k, :]) / np.linalg.norm(
-      np.cross(verts[i, :] - verts[k, :], verts[j, :] - verts[k, :])
-    )
-    vert_cots[j, k] = np.dot(verts[j, :] - verts[i, :], verts[k, :] - verts[i, :]) / np.linalg.norm(
-      np.cross(verts[j, :] - verts[i, :], verts[k, :] - verts[i, :])
-    )
-    vert_cots[k, i] = np.dot(verts[k, :] - verts[j, :], verts[i, :] - verts[j, :]) / np.linalg.norm(
-      np.cross(verts[k, :] - verts[j, :], verts[i, :] - verts[j, :])
-    )
+    edge_cots[i, j] = np.sum(
+      (verts[i, :] - verts[k, :]) * (verts[j, :] - verts[k, :]), axis=1
+    ) / np.linalg.norm(np.cross(verts[i, :] - verts[k, :], verts[j, :] - verts[k, :]), axis=1)
+    edge_cots[j, k] = np.sum(
+      (verts[j, :] - verts[i, :]) * (verts[k, :] - verts[i, :]), axis=1
+    ) / np.linalg.norm(np.cross(verts[j, :] - verts[i, :], verts[k, :] - verts[i, :]), axis=1)
+    edge_cots[k, i] = np.sum(
+      (verts[k, :] - verts[j, :]) * (verts[i, :] - verts[j, :]), axis=1
+    ) / np.linalg.norm(np.cross(verts[k, :] - verts[j, :], verts[i, :] - verts[j, :]), axis=1)
+
+    return edge_cots
 
 
 if __name__ == "__main__":
