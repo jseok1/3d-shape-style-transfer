@@ -1,7 +1,9 @@
 import numpy as np
-from scipy.sparse import csr_array, csc_array, lil_array, diags
+from scipy.sparse import csr_array, csc_array, lil_array, diags, hstack, vstack
 from sksparse.cholmod import cholesky
 from tqdm import tqdm
+
+import timeit
 
 # ASSUMPTION: MANIFOLD TRIANGLE MESHES
 
@@ -12,71 +14,63 @@ from tqdm import tqdm
 class Stylizer:
   def run(self, analogy_path, input_path, output_path, strength):
     analogy_verts, analogy_faces = self._load_obj(analogy_path)
-    input_verts, input_faces = self._load_obj(input_path)
-    output_verts = np.copy(input_verts)
-
-    input_nverts, _ = input_verts.shape
-
     analogy_face_normals = self._calc_face_normals(analogy_verts, analogy_faces)
+
+    input_verts, input_faces = self._load_obj(input_path)
+    vert_neighbor_face_masks = self._calc_vert_neighbor_face_masks(input_verts, input_faces)
+    input_vert_neighbors, weights = self._calc_vert_neighbor_edge_masks(
+      input_verts, input_faces, vert_neighbor_face_masks
+    )
     input_face_normals = self._calc_face_normals(input_verts, input_faces)
     input_face_areas = self._calc_face_areas(input_verts, input_faces)
     input_vert_normals = self._calc_vert_normals(
-      input_verts, input_faces, input_face_normals, input_face_areas
+      input_verts, input_faces, vert_neighbor_face_masks, input_face_normals, input_face_areas
     )
-    input_vert_areas = self._calc_vert_areas(input_verts, input_faces, input_face_areas)
-    input_vert_neighbors, input_vert_neighbor_weights = self._calc_vert_neighbors(
-      input_verts, input_faces
+    input_vert_areas = self._calc_vert_areas(
+      input_verts, input_faces, vert_neighbor_face_masks, input_face_areas
     )
+
+    output_verts = np.copy(input_verts)
     target_vert_normals = self._calc_target_vert_normals(analogy_face_normals, input_vert_normals)
 
-    print('Calculating Q...')
-    # kinda slow: sparse matrix here
-    Q = csr_array((input_nverts, input_nverts))
+    input_nverts, _ = input_verts.shape
+
+    input_cot_laplacian = csr_array((input_nverts, input_nverts))
     for k in range(input_nverts):
-      Q += (
-        input_vert_neighbors[k] @ diags(input_vert_neighbor_weights[k]) @ input_vert_neighbors[k].T
-      )
+      input_cot_laplacian += input_vert_neighbors[k] @ diags(weights[k]) @ input_vert_neighbors[k].T
+    factor = cholesky(input_cot_laplacian, ordering_method="amd")
 
-    # assert np.all(np.allclose(Q, Q.T))  # Q is a |V|-by-|V| symmetric matrix
-    # assert positive eigenvalues
-
-    print('Cholesky decomp...')
-    factor = cholesky(Q, ordering_method="amd")
-
-    print('Calculating K...')
     # K is a |9V|-by-|3V| matrix stacking the constant terms
-    K = np.zeros((input_nverts * 3, input_nverts))
-    for k in range(input_nverts):
-      # repeated computation here - can speed up
-      K[3 * k : 3 * (k + 1), :] = (
-        input_verts.T
-        @ input_vert_neighbors[k]
-        @ diags(input_vert_neighbor_weights[k])
-        @ input_vert_neighbors[k].T
-      )
-    # what does this look like? is it dense?
+    K = vstack(
+      [
+        csc_array(
+          input_verts.T @ input_vert_neighbors[k] @ diags(weights[k]) @ input_vert_neighbors[k].T
+        )
+        for k in range(input_nverts)
+      ]
+    )
 
     # 3-by-|3V|
     rotations = np.hstack([np.eye(3)] * input_nverts)
 
-    for __ in tqdm(range(100)):
+    for _ in tqdm(range(100)):
       # local step
-      self._calc_optimal_rotations(
+      self._local_step(
         rotations,
         input_verts,
         output_verts,
         input_vert_normals,
         target_vert_normals,
         input_vert_neighbors,
-        input_vert_neighbor_weights,
+        weights,
         input_vert_areas,
         strength,
       )
 
       # global step
-      self._calc_optimal_output_verts(output_verts, rotations, K, factor)
+      self._global_step(output_verts, rotations, K, factor)
 
-      # energy = np.trace(self._output_verts.T @ Q @ self._output_verts) - 2 * np.trace(
+      # energy = np.trace(self._output_verts.T @ cot_laplacian @ self._output_verts) - 2 * np.trace(
       #   R @ K @ self._output_verts
       # )  # why is this neg? -- maybe because there's no constant
       # print(energy)
@@ -94,7 +88,7 @@ class Stylizer:
 
     return target_vert_normals
 
-  def _calc_optimal_rotations(
+  def _local_step(
     self,
     rotations,
     input_verts,
@@ -102,21 +96,20 @@ class Stylizer:
     input_vert_normals,
     target_vert_normals,
     input_vert_neighbors,
-    input_vert_neighbor_weights,
+    weights,
     input_vert_areas,
     strength,
   ):
     input_nverts, _ = input_verts.shape
 
-    # potential sparse optim, also do in parallel (?)
     for k in range(input_nverts):
-      input_edges = np.hstack(
+      input_vert_neighbor_edges = np.hstack(
         [
           input_verts.T @ input_vert_neighbors[k],
           input_vert_normals[k, :].reshape((3, 1)),
         ]
       )
-      output_edges = np.hstack(
+      output_vert_neighbor_edges = np.hstack(
         [
           output_verts.T @ input_vert_neighbors[k],
           target_vert_normals[k, :].reshape((3, 1)),
@@ -124,9 +117,9 @@ class Stylizer:
       )
 
       U, _, Vt = np.linalg.svd(
-        input_edges
-        @ diags(input_vert_neighbor_weights[k] + [strength * input_vert_areas[k]])
-        @ output_edges.T
+        input_vert_neighbor_edges
+        @ diags(np.append(weights[k], strength * input_vert_areas[k]))
+        @ output_vert_neighbor_edges.T
       )
       rotation = Vt.T @ U.T
       if np.linalg.det(rotation) < 0:
@@ -134,7 +127,7 @@ class Stylizer:
         rotation = Vt.T @ U.T
       rotations[:, 3 * k : 3 * (k + 1)] = rotation
 
-  def _calc_optimal_output_verts(self, output_verts, rotations, K, factor):
+  def _global_step(self, output_verts, rotations, K, factor):
     output_verts[:, :] = factor(K.T @ rotations.T)
 
   def _load_obj(self, path):
@@ -161,8 +154,6 @@ class Stylizer:
 
     return np.array(verts), np.array(faces)
 
-  # ACTUALLY QUESTION -- IS THERE ANYTHING THAT NEEDS THIS TO BE A WATERTIGHT MESH???
-
   def _save_obj(self, path, verts, faces):
     lines = []
 
@@ -175,115 +166,103 @@ class Stylizer:
     with open(path, "w") as file:
       file.write("\n".join(lines))
 
-  # CORRECT DON'T TOUCH
   def _calc_face_areas(self, verts, faces):
-    nfaces, _ = faces.shape
+    verts_ijk = verts[faces]
+    verts_i = verts_ijk[:, 0]
+    verts_j = verts_ijk[:, 1]
+    verts_k = verts_ijk[:, 2]
 
-    face_areas = np.zeros((nfaces,))
-
-    for f in range(nfaces):
-      i, j, k = faces[f, :]
-      vert_i, vert_j, vert_k = verts[i, :], verts[j, :], verts[k, :]
-
-      edge_ij = vert_j - vert_i
-      edge_jk = vert_k - vert_j
-
-      face_area = np.linalg.norm(np.cross(edge_ij, edge_jk)) / 2
-      face_areas[f] = face_area
+    face_areas = np.linalg.norm(np.cross(verts_j - verts_i, verts_k - verts_j), axis=1) / 2
 
     return face_areas
 
-  # CORRECT DON'T TOUCH (but TODO: mixed Voronoi area)
-  def _calc_vert_areas(self, verts, faces, face_areas):
+  # TODO: mixed Voronoi area
+  def _calc_vert_areas(self, verts, faces, vert_neighbor_face_masks, face_areas):
     nverts, _ = verts.shape
-    nfaces, _ = faces.shape
 
     vert_areas = np.zeros((nverts,))
+
     for k in range(nverts):
-      vert_area = 0
-      for f in range(nfaces):
-        if k in faces[f, :]:
-          vert_area += face_areas[f] / 3
-      vert_areas[k] = vert_area
-    # mixed Voronoi area: acute/right -> circumcenters; obtuse -> barycenter
+      vert_neighbor_face_areas = vert_neighbor_face_masks[k].T @ face_areas
+      vert_areas[k] = np.sum(vert_neighbor_face_areas / 3, axis=0)
+
     return vert_areas
 
-  # CORRECT DON'T TOUCH
   def _calc_face_normals(self, verts, faces):
-    nfaces, _ = faces.shape
+    verts_ijk = verts[faces]
+    verts_i = verts_ijk[:, 0]
+    verts_j = verts_ijk[:, 1]
+    verts_k = verts_ijk[:, 2]
 
-    face_normals = np.zeros((nfaces, 3))
-
-    for f in range(nfaces):
-      i, j, k = faces[f, :]
-      vert_i, vert_j, vert_k = verts[i, :], verts[j, :], verts[k, :]
-
-      edge_ij = vert_j - vert_i
-      edge_jk = vert_k - vert_j
-
-      face_normal = np.cross(edge_ij, edge_jk)
-      face_normal /= np.linalg.norm(face_normal)
-      face_normals[f, :] = face_normal
+    face_normals = np.cross(verts_i - verts_j, verts_k - verts_j)
+    face_normals /= np.linalg.norm(face_normals, axis=1).reshape((-1, 1))
 
     return face_normals
 
-  # CORRECT DON'T TOUCH
-  def _calc_vert_normals(self, verts, faces, face_normals, face_areas):
+  def _calc_vert_normals(self, verts, faces, vert_neighbor_face_masks, face_normals, face_areas):
     nverts, _ = verts.shape
-    nfaces, _ = faces.shape
 
     vert_normals = np.zeros((nverts, 3))
 
-    for v in range(nverts):
-      vert_normal = np.zeros((3,))
+    for k in range(nverts):
+      vert_neighbor_face_areas = vert_neighbor_face_masks[k].T @ face_areas
+      vert_neighbor_face_normals = vert_neighbor_face_masks[k].T @ face_normals
 
-      for f in range(nfaces):
-        if v in faces[f, :]:
-          vert_normal += face_areas[f] * face_normals[f, :]
-
-      vert_normal /= np.linalg.norm(vert_normal)
-      vert_normals[v, :] = vert_normal
+      vert_normals[k, :] = np.sum(
+        vert_neighbor_face_areas.reshape((-1, 1)) * vert_neighbor_face_normals,
+        axis=0,
+      )
+      vert_normals[k, :] /= np.linalg.norm(vert_normals[k, :])
 
     return vert_normals
 
-  def _calc_vert_neighbors(self, verts, faces):
+  def _calc_vert_neighbor_face_masks(self, verts, faces):
+    nverts, _ = verts.shape
+    nfaces, _ = faces.shape
+
+    vert_neighbor_face_masks = []
+    for k in range(nverts):
+      y, _ = np.where(k == faces)
+      (vert_nfaces,) = y.shape
+
+      x = np.arange(vert_nfaces)
+      entries = [1] * vert_nfaces
+
+      vert_neighbor_face_masks.append(csr_array((entries, (y, x)), shape=(nfaces, vert_nfaces)))
+
+    # vert_neighbor_face_masks = np.any(np.arange(nverts).reshape((-1, 1, 1)) == faces, axis=2)
+    return vert_neighbor_face_masks
+
+  def _calc_vert_neighbor_edge_masks(self, verts, faces, vert_neighbor_face_masks):
     nverts, _ = verts.shape
 
-    vert_cots = self._calc_vert_cots(verts, faces)
+    vert_neighbor_edge_masks = []
+    weights = []
 
-    # 1-ring neighborhood
-    vert_neighbors = []
-    vert_neighbor_weights = []
+    edge_cots = self._calc_edge_cots(verts, faces)
 
-    for v in range(nverts):
-      edges_list = []
-      for face in faces:
-        if v not in face:
-          continue
-        i, j, k = face
-        edges_list.append((i, j))
-        edges_list.append((j, k))
-        edges_list.append((k, i))
+    for k in range(nverts):
+      vert_neighbor_faces = vert_neighbor_face_masks[k].T @ faces
 
-      nedges = len(edges_list)
+      tips = vert_neighbor_faces.flatten()
+      tails = vert_neighbor_faces[:, [1, 2, 0]].flatten()
 
-      edges = lil_array((nverts, nedges))
-      weights = []
-      for i, edge in enumerate(edges_list):
-        tail, tip = edge
-        edges[tail, i] = -1
-        edges[tip, i] = 1
-        weights.append((vert_cots[tail, tip] + vert_cots[tip, tail]) / 2)
+      y = np.vstack([tails, tips]).T.flatten()
+      (vert_nedges,) = y.shape
+      vert_nedges //= 2
 
-      vert_neighbors.append(csr_array(edges))
-      vert_neighbor_weights.append(weights)
+      x = np.repeat(np.arange(vert_nedges), 2)
+      entries = np.vstack([[-1] * vert_nedges, [1] * vert_nedges]).T.flatten()
 
-    return vert_neighbors, vert_neighbor_weights
+      vert_neighbor_edge_masks.append(csr_array((entries, (y, x)), shape=(nverts, vert_nedges)))
+      weights.append((edge_cots[tips, tails] + edge_cots[tails, tips]) / 2)
 
-  def _calc_vert_cots(self, verts, faces):
+    return vert_neighbor_edge_masks, weights
+
+  def _calc_edge_cots(self, verts, faces):
     nverts, _ = verts.shape
 
-    vert_cots = lil_array((nverts, nverts))
+    edge_cots = np.zeros((nverts, nverts))
 
     for face in faces:
       i, j, k = face
@@ -293,17 +272,34 @@ class Stylizer:
       edge_jk = vert_k - vert_j
       edge_ki = vert_i - vert_k
 
-      vert_cots[i, j] = np.dot(edge_ki, -edge_jk) / np.linalg.norm(np.cross(edge_ki, -edge_jk))
-      vert_cots[j, k] = np.dot(edge_ij, -edge_ki) / np.linalg.norm(np.cross(edge_ij, -edge_ki))
-      vert_cots[k, i] = np.dot(edge_jk, -edge_ij) / np.linalg.norm(np.cross(edge_jk, -edge_ij))
+      edge_cots[i, j] = np.dot(edge_ki, -edge_jk) / np.linalg.norm(np.cross(edge_ki, -edge_jk))
+      edge_cots[j, k] = np.dot(edge_ij, -edge_ki) / np.linalg.norm(np.cross(edge_ij, -edge_ki))
+      edge_cots[k, i] = np.dot(edge_jk, -edge_ij) / np.linalg.norm(np.cross(edge_jk, -edge_ij))
 
-    return vert_cots
+    return edge_cots
+
+    nverts, _ = verts.shape
+
+    vert_cots = np.zeros((nverts, nverts))
+
+    i, j, k = faces[:, 0], faces[:, 1], faces[:, 2]
+
+    vert_cots[i, j] = np.dot(verts[i, :] - verts[k, :], verts[j, :] - verts[k, :]) / np.linalg.norm(
+      np.cross(verts[i, :] - verts[k, :], verts[j, :] - verts[k, :])
+    )
+    vert_cots[j, k] = np.dot(verts[j, :] - verts[i, :], verts[k, :] - verts[i, :]) / np.linalg.norm(
+      np.cross(verts[j, :] - verts[i, :], verts[k, :] - verts[i, :])
+    )
+    vert_cots[k, i] = np.dot(verts[k, :] - verts[j, :], verts[i, :] - verts[j, :]) / np.linalg.norm(
+      np.cross(verts[k, :] - verts[j, :], verts[i, :] - verts[j, :])
+    )
 
 
 if __name__ == "__main__":
   # maybe there should be a preprocessor that makes meshes Delaunay
   stylizer = Stylizer()
-  stylizer.run("./assets/cube.obj", "./assets/spot/spot_triangulated.obj", "./out.obj", 10)
+  # stylizer.run("./assets/tetrahedron.obj", "./assets/spot/spot_triangulated.obj", "./spot-tetrahedron.obj", 10)
+  stylizer.run("./assets/cube.obj", "./assets/sphere.obj", "./out.obj", 100)
 
   # maybe a constraint should be locking in a single vertex?
 
