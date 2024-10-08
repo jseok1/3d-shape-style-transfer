@@ -15,17 +15,18 @@ class Stylizer:
     analogy_face_normals = self._calc_face_normals(analogy_verts, analogy_faces)
 
     input_verts, input_faces = self._load_obj(input_path)
-    vert_neighbor_face_masks = self._calc_vert_neighbor_face_masks(input_verts, input_faces)
-    input_vert_neighbors, weights = self._calc_vert_neighbor_edge_masks(
-      input_verts, input_faces, vert_neighbor_face_masks
-    )
-    input_face_normals = self._calc_face_normals(input_verts, input_faces)
     input_face_areas = self._calc_face_areas(input_verts, input_faces)
-    input_vert_normals = self._calc_vert_normals(
-      input_verts, vert_neighbor_face_masks, input_face_normals, input_face_areas
+    input_face_normals = self._calc_face_normals(input_verts, input_faces)
+    input_edge_cots = self._calc_edge_cots(input_verts, input_faces)
+    input_vert_neighbor_face_masks = self._calc_vert_neighbor_face_masks(input_verts, input_faces)
+    input_vert_neighbor_edge_masks, weights = self._calc_vert_neighbor_edge_masks(
+      input_verts, input_faces, input_vert_neighbor_face_masks, input_edge_cots
     )
     input_vert_areas = self._calc_vert_areas(
-      input_verts, vert_neighbor_face_masks, input_face_areas
+      input_verts, input_faces, input_vert_neighbor_face_masks, input_face_areas
+    )
+    input_vert_normals = self._calc_vert_normals(
+      input_verts, input_faces, input_vert_neighbor_face_masks, input_face_areas, input_face_normals
     )
 
     output_verts = np.copy(input_verts)
@@ -35,14 +36,19 @@ class Stylizer:
 
     input_cot_laplacian = csr_array((input_nverts, input_nverts))
     for k in range(input_nverts):
-      input_cot_laplacian += input_vert_neighbors[k] @ diags(weights[k]) @ input_vert_neighbors[k].T
+      input_cot_laplacian += (
+        input_vert_neighbor_edge_masks[k] @ diags(weights[k]) @ input_vert_neighbor_edge_masks[k].T
+      )
     factor = cholesky(input_cot_laplacian, ordering_method="amd")
 
     # K is a |9V|-by-|3V| matrix stacking the constant terms
     K = vstack(
       [
         csc_array(
-          input_verts.T @ input_vert_neighbors[k] @ diags(weights[k]) @ input_vert_neighbors[k].T
+          input_verts.T
+          @ input_vert_neighbor_edge_masks[k]
+          @ diags(weights[k])
+          @ input_vert_neighbor_edge_masks[k].T
         )
         for k in range(input_nverts)
       ]
@@ -59,7 +65,7 @@ class Stylizer:
         output_verts,
         input_vert_normals,
         target_vert_normals,
-        input_vert_neighbors,
+        input_vert_neighbor_edge_masks,
         weights,
         input_vert_areas,
         strength,
@@ -93,7 +99,7 @@ class Stylizer:
     output_verts,
     input_vert_normals,
     target_vert_normals,
-    input_vert_neighbors,
+    input_vert_neighbor_edge_masks,
     weights,
     input_vert_areas,
     strength,
@@ -103,13 +109,13 @@ class Stylizer:
     for k in range(input_nverts):
       input_vert_neighbor_edges = np.hstack(
         [
-          input_verts.T @ input_vert_neighbors[k],
+          input_verts.T @ input_vert_neighbor_edge_masks[k],
           input_vert_normals[k, :].reshape((3, 1)),
         ]
       )
       output_vert_neighbor_edges = np.hstack(
         [
-          output_verts.T @ input_vert_neighbors[k],
+          output_verts.T @ input_vert_neighbor_edge_masks[k],
           target_vert_normals[k, :].reshape((3, 1)),
         ]
       )
@@ -173,8 +179,16 @@ class Stylizer:
 
     return face_areas
 
+  def _calc_face_normals(self, verts, faces):
+    i, j, k = faces[:, 0], faces[:, 1], faces[:, 2]
+
+    face_normals = np.cross(verts[i, :] - verts[j, :], verts[k, :] - verts[j, :])
+    face_normals /= np.linalg.norm(face_normals, axis=1).reshape((-1, 1))
+
+    return face_normals
+
   # TODO: mixed Voronoi area
-  def _calc_vert_areas(self, verts, vert_neighbor_face_masks, face_areas):
+  def _calc_vert_areas(self, verts, faces, vert_neighbor_face_masks, face_areas):
     nverts, _ = verts.shape
 
     vert_areas = np.zeros((nverts,))
@@ -185,15 +199,7 @@ class Stylizer:
 
     return vert_areas
 
-  def _calc_face_normals(self, verts, faces):
-    i, j, k = faces[:, 0], faces[:, 1], faces[:, 2]
-
-    face_normals = np.cross(verts[i, :] - verts[j, :], verts[k, :] - verts[j, :])
-    face_normals /= np.linalg.norm(face_normals, axis=1).reshape((-1, 1))
-
-    return face_normals
-
-  def _calc_vert_normals(self, verts, vert_neighbor_face_masks, face_normals, face_areas):
+  def _calc_vert_normals(self, verts, faces, vert_neighbor_face_masks, face_areas, face_normals):
     nverts, _ = verts.shape
 
     vert_normals = np.zeros((nverts, 3))
@@ -215,6 +221,7 @@ class Stylizer:
     nfaces, _ = faces.shape
 
     vert_neighbor_face_masks = []
+
     for k in range(nverts):
       y, _ = np.where(k == faces)
       (vert_nfaces,) = y.shape
@@ -226,13 +233,11 @@ class Stylizer:
 
     return vert_neighbor_face_masks
 
-  def _calc_vert_neighbor_edge_masks(self, verts, faces, vert_neighbor_face_masks):
+  def _calc_vert_neighbor_edge_masks(self, verts, faces, vert_neighbor_face_masks, edge_cots):
     nverts, _ = verts.shape
 
     vert_neighbor_edge_masks = []
     weights = []
-
-    edge_cots = self._calc_edge_cots(verts, faces)
 
     for k in range(nverts):
       vert_neighbor_faces = vert_neighbor_face_masks[k].T @ faces
