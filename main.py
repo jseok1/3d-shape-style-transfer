@@ -1,9 +1,7 @@
 import numpy as np
-from scipy.sparse import csr_array, csc_array, lil_array, diags, hstack, vstack
+from scipy.sparse import csr_array, csc_array, diags, vstack
 from sksparse.cholmod import cholesky
 from tqdm import tqdm
-
-import timeit
 
 # ASSUMPTION: MANIFOLD TRIANGLE MESHES
 
