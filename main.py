@@ -222,7 +222,7 @@ class Stylizer:
       x = np.arange(vert_nfaces)
       entries = [1] * vert_nfaces
 
-      vert_neighbor_face_masks.append(csr_array((entries, (y, x)), shape=(nfaces, vert_nfaces)))
+      vert_neighbor_face_masks.append(csc_array((entries, (y, x)), shape=(nfaces, vert_nfaces)))
 
     return vert_neighbor_face_masks
 
@@ -247,7 +247,7 @@ class Stylizer:
       x = np.repeat(np.arange(vert_nedges), 2)
       entries = np.vstack([[-1] * vert_nedges, [1] * vert_nedges]).T.flatten()
 
-      vert_neighbor_edge_masks.append(csr_array((entries, (y, x)), shape=(nverts, vert_nedges)))
+      vert_neighbor_edge_masks.append(csc_array((entries, (y, x)), shape=(nverts, vert_nedges)))
       weights.append((edge_cots[tips, tails] + edge_cots[tails, tips]) / 2)
 
     return vert_neighbor_edge_masks, weights
@@ -255,9 +255,9 @@ class Stylizer:
   def _calc_edge_cots(self, verts, faces):
     nverts, _ = verts.shape
 
-    edge_cots = np.zeros((nverts, nverts))
-
     i, j, k = faces[:, 0], faces[:, 1], faces[:, 2]
+
+    edge_cots = np.zeros((nverts, nverts))
 
     edge_cots[i, j] = np.sum(
       (verts[i, :] - verts[k, :]) * (verts[j, :] - verts[k, :]), axis=1
@@ -279,16 +279,6 @@ if __name__ == "__main__":
   stylizer.run("./assets/cube.obj", "./assets/sphere.obj", "./out.obj", 100)
 
   # maybe a constraint should be locking in a single vertex?
-
-  # a square matrix is PSD iff it's symmetric and its eigenvalues are non-negative
-
-  #
-  # L encodes the connectivity and angles of the mesh geometry
-  # x.T L x describes a scalar smoothness measure of the function x (e.g. position) across the mesh
-  # If x is position, then x.TLx measures how much the vertices' positions deviate from their neighbors.
-  # In Laplacian smoothing, x.T L x is minimized.
-
-  # x.TLx = sum_{i,j} w_ij(x_i - x_j)^2
 
   # csr_array A --> A v
   # csc_array A --> v A or A.T v

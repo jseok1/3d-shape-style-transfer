@@ -6,6 +6,10 @@ ARAP encourages rigid transformations (translation and rotation only) in a least
 Normal-Driven Spherical Shape Analogies
 As-Rigid-As-Possible Surface Modeling
 
+Sparse matrices:
+CSR -> Av or v^T A^T
+CSC -> v^TA or A^Tv
+
 --> another project idea could be ARAP deformations in real-time
 
 https://mobile.rodolphe-vaillant.fr/entry/101/definition-laplacian-matrix-for-triangle-meshes
