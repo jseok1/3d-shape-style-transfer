@@ -4,28 +4,30 @@
 
 ## Introduction
 
-This is a tool that stylizes 3D objects based on the techniques introduced in the paper _Normal-Driven Spherical Shape Analogies_ by Liu and Jacobson. The idea behind their approach is to use analogies of the form "$A$ is to $A^\prime$ as $B$ is to $B^\prime$", where $A$, $A^\prime$, $B$, and $B^\prime$ are objects, to capture the surface normal "style" of $A^\prime$ and analogously apply that surface normal style to $B$ to form $B^\prime$.
+This is a tool that stylizes 3D objects based on the techniques introduced in the paper _Normal-Driven Spherical Shape Analogies_ by Liu and Jacobson. The idea behind their approach is to use analogies of the form " $A$ _is to_ $A^\prime$ _as_ $B$ _is to_ $B^\prime$ " to capture the style of $A^\prime$ and analogously apply that style to $B$ to construct $B^\prime$. This is achieved by constructing surface normals for $B^\prime$ such that the mapping between the surface normals of $B$ and $B^\prime$ is analogous to the mapping between the surface normals of $A$ and $A^\prime$, where $A$ is a unit sphere.
 
-Here, $A$ is a unit sphere. Assume $A$ is deformed into $A^\prime$. Then, the map $\phi : N_{A} \rightarrow N_{A^\prime}$ 
+Concretely, this is achieved by mapping the points on $B$ to points on $A$ using the Gauss map. This equivalently maps the surface normals on $B$ to surface normals on $A$ using the trivial map, which provides a way for the mapping between the surface normals of $A$ and $A^\prime$ to be transferred to the surface normals of $B$. The surface normals for $B^\prime$ can then be analogously computed.
 
+Once the target normals are determined, the optimal $B^\prime$ is constructed by deforming $B$ such that the following energy is minimized. 
 
+```math
+\underset{V^\prime, R}{\text{min}} \sum_{k \in V}\sum_{i,j \in N_k} w_{ij} \|\textbf{R}_k\textbf{e}_{ij} - \textbf{e}_{ij}^\prime\|^2 + \lambda a_k \|\textbf{R}_k \hat{\textbf{n}}_k - \textbf{t}_k\|^2
+```
 
-If _A_ is deformed into _A'_, then the relationship between the surface normals of _A_ and _A'_ can analogously be used to relate the surface normals of _B_ and _B'_. Then by extension, _B_ can be analogously deformed into _B'_
-
-
-
-. _A'_ and _B'_ will share similar surface normals and hence have the same geometric style.
-
-The algorithm proceeds in three steps.
-1. 
-
-
-
-
-
-
-
-
+Where...
+* $\textbf{V}$ is a |V|-by-3 matrix containing the vertices of $B$
+* $\textbf{V}^\prime$ is a |V|-by-3 matrix containing the vertices of $B^\prime$
+* $\textbf{R}$ is the 3-by-3 rotation matrix on vertex $k$
+* $N_k$ is the one-ring neighborhood of vertex $k$
+* $\textbf{e}_{ij}$ is the edge from vertex $i$ to vertex $j$ in $B$
+* $\textbf{e}_{ij}$ is the edge from vertex $i$ to vertex $j$ in $B^\prime$
+* $w_{ij}$ is the cotangent weight of edge $(i, j)$ in $B$, calculated as $\frac{1}{2}(\cot \alpha_{ij} + \cot \beta_{ij})$
+* $\lambda$ is a parameter that controls the strength of ARAP regularization
+* $a_k$ is the Voronoi area of vertex $k$ in $B$
+* $\textbf{n}_k$ is the vertex normal at vertex $k$ in $B$ calculated as the area-weighted average of face normals
+* $\textbf{t}_k$ is the target vertex normal at vertex $k$
+  
+This energy uses as-rigid-as-possible (ARAP) regularization to penalize non-rigid transformations (i.e., rotations and translations) and preserve the features of $B$. 
 
 ## Usage
 
@@ -50,39 +52,15 @@ options:
                         output .obj path
 ```
 
-ARAP encourages rigid transformations (translation and rotation only) in a least squares formulation.
-
 ## References
 
 Hsueh-Ti Derek Liu and Alec Jacobson. Normal-driven spherical shape analogies. _Computer Graphics
 Forum_, 40(5):45–55, 2021.
 
-Olga Sorkine and Marc Alexa. As-rigid-as-possible surface modeling. In _Proceedings of EUROGRAPH-
+Olga Sorkine and Marc Alexa. As-Rigid-As-Possible Surface Modeling. In _Proceedings of EUROGRAPH-
 ICS/ACM SIGGRAPH Symposium on Geometry Processing_, pages 109–116, 2007.
 
-Normal-Driven Spherical Shape Analogies
-As-Rigid-As-Possible Surface Modeling
-
-Sparse matrices:
-CSR -> Av or v^T A^T
-CSC -> v^TA or A^Tv
-
---> another project idea could be ARAP deformations in real-time
-
-https://mobile.rodolphe-vaillant.fr/entry/101/definition-laplacian-matrix-for-triangle-meshes
-
-    # Good to add in README
-    # Since Q (L in the other paper) is symmetric positive-definite, ve definite, the sparse
-    # Cholesky factorization with fill-reducing reordering is an efficient choice
-    # Step 1: Perform Cholesky factorization: A = L L^T
-    # L = np.linalg.cholesky(A)
-    # Step 2: Solve Ly = b using forward substitution
-    # y = np.linalg.solve(L, b)
-    # Step 3: Solve L^T x = y using back substitution
-    # x = np.linalg.solve(L.T, y)
-    # Factorization is more numerically stable and computationally efficient than solving system
-    # via x = A^-1 b
+## Backlog
 
 TODO: Voronoi area, mean curvature flow, transfer texture coords
-
-# maybe a constraint should be locking in a single vertex?
+maybe a constraint should be locking in a single vertex?
