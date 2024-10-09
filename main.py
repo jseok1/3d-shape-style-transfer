@@ -1,3 +1,4 @@
+import argparse
 import numpy as np
 from scipy.sparse import csr_array, csc_array, diags, vstack
 from sksparse.cholmod import cholesky
@@ -278,12 +279,17 @@ class Stylizer:
 
 
 if __name__ == "__main__":
-  # maybe there should be a preprocessor that makes meshes Delaunay
+  parser = argparse.ArgumentParser()
+  parser.add_argument(
+    "-a",
+    "--analogy-path",
+    type=str,
+    required=True,
+    help="analogy .obj path (.obj with target style)",
+  )
+  parser.add_argument("-i", "--input-path", type=str, required=True, help="input .obj path")
+  parser.add_argument("-o", "--output-path", type=str, required=True, help="output .obj path")
+  args = parser.parse_args()
+
   stylizer = Stylizer()
-  # stylizer.run("./assets/tetrahedron.obj", "./assets/spot/spot_triangulated.obj", "./spot-tetrahedron.obj", 10)
-  stylizer.run("./assets/cube.obj", "./assets/sphere.obj", "./out.obj", 100)
-
-  # maybe a constraint should be locking in a single vertex?
-
-  # csr_array A --> A v
-  # csc_array A --> v A or A.T v
+  stylizer.run(args.analogy_path, args.input_path, args.output_path, 100)
