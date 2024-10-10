@@ -6,14 +6,11 @@ from tqdm import tqdm
 
 # ASSUMPTION: MANIFOLD TRIANGLE MESHES
 
-# # 1. position on input to position on unit sphere (Gauss map; using normals)
-# # 2. position on unit sphere to analogy normal
-
 
 class Stylizer:
-  def run(self, analogy_path, input_path, output_path, strength):
-    analogy_verts, analogy_faces = self._load_obj(analogy_path)
-    analogy_face_normals = self._calc_face_normals(analogy_verts, analogy_faces)
+  def run(self, reference_path, input_path, output_path, strength):
+    reference_verts, reference_faces = self._load_obj(reference_path)
+    reference_face_normals = self._calc_face_normals(reference_verts, reference_faces)
 
     input_verts, input_faces = self._load_obj(input_path)
     input_face_areas = self._calc_face_areas(input_verts, input_faces)
@@ -31,7 +28,7 @@ class Stylizer:
     )
 
     output_verts = np.copy(input_verts)
-    target_vert_normals = self._calc_target_vert_normals(analogy_face_normals, input_vert_normals)
+    target_vert_normals = self._calc_target_vert_normals(reference_face_normals, input_vert_normals)
 
     input_nverts, _ = input_verts.shape
 
@@ -58,7 +55,7 @@ class Stylizer:
     # 3-by-|3V|
     rotations = np.hstack([np.eye(3)] * input_nverts)
 
-    for _ in tqdm(range(100)):
+    for _ in tqdm(range(20)):
       # local step
       self._local_step(
         rotations,
@@ -75,21 +72,20 @@ class Stylizer:
       # global step
       self._global_step(output_verts, rotations, K, factor)
 
-      # energy = np.trace(self._output_verts.T @ cot_laplacian @ self._output_verts) - 2 * np.trace(
-      #   R @ K @ self._output_verts
-      # )  # why is this neg? -- maybe because there's no constant
-      # print(energy)
+      # energy = np.trace(output_verts.T @ input_cot_laplacian @ output_verts) - 2 * np.trace(
+      #   rotations @ K @ output_verts
+      # )
 
     self._save_obj(output_path, output_verts, input_faces)
 
-  def _calc_target_vert_normals(self, analogy_face_normals, input_vert_normals):
+  def _calc_target_vert_normals(self, reference_face_normals, input_vert_normals):
     input_nverts, _ = input_vert_normals.shape
 
     target_vert_normals = np.zeros((input_nverts, 3))
 
     for i in range(input_nverts):
-      j = np.argmax(np.dot(analogy_face_normals, input_vert_normals[i, :]))
-      target_vert_normals[i, :] = analogy_face_normals[j, :]
+      j = np.argmax(np.dot(reference_face_normals, input_vert_normals[i, :]))
+      target_vert_normals[i, :] = reference_face_normals[j, :]
 
     return target_vert_normals
 
@@ -144,8 +140,7 @@ class Stylizer:
         if line.startswith("v "):
           parts = line.split()
           x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
-          vert = [x, y, z]
-          verts.append(vert)
+          verts.append([x, y, z])
 
         elif line.startswith("f "):
           parts = line.split()
@@ -154,8 +149,7 @@ class Stylizer:
             int(parts[2].split("/")[0]) - 1,
             int(parts[3].split("/")[0]) - 1,
           )
-          face = [i, j, k]
-          faces.append(face)
+          faces.append([i, j, k])
 
     return np.array(verts), np.array(faces)
 
@@ -280,16 +274,10 @@ class Stylizer:
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
-  parser.add_argument(
-    "-a",
-    "--analogy-path",
-    type=str,
-    required=True,
-    help="analogy .obj path (.obj with target style)",
-  )
+  parser.add_argument("-r", "--reference-path", type=str, required=True, help="reference .obj path")
   parser.add_argument("-i", "--input-path", type=str, required=True, help="input .obj path")
   parser.add_argument("-o", "--output-path", type=str, required=True, help="output .obj path")
   args = parser.parse_args()
 
   stylizer = Stylizer()
-  stylizer.run(args.analogy_path, args.input_path, args.output_path, 100)
+  stylizer.run(args.reference_path, args.input_path, args.output_path, 5)
