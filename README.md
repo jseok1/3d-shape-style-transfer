@@ -35,12 +35,12 @@ The second condition can be achieved by minimizing the as-rigid-as-possible (ARA
 
 In addition to $`V^\prime`$, $`R := \{\textbf{R}_0, \textbf{R}_1, \ldots, \textbf{R}_{|V|}\}`$ must be also optimized.
 
-Together, these conditions yield the following energy, where $`\lambda`$ is a parameter that controls the balance between the input mesh's style and the reference mesh's style in the output mesh.
+Together, these conditions yield the following energy, where $`\gamma`$ is a parameter that controls the balance between the input mesh's style and the reference mesh's style in the output mesh.
 
 ```math
 \begin{align*}
-&\underset{V^\prime, R}{\text{argmin}} \sum_{k = 1}^{|V|}\sum_{i,j \in \mathcal{N}(k)} w_{ij} \|\textbf{R}_k\textbf{e}_{ij} - \textbf{e}_{ij}^\prime\|^2 + \lambda a_k \|\hat{\textbf{n}}_k^\prime - \textbf{t}_k\|^2 \\
-\approx\:&\underset{V^\prime, R}{\text{argmin}} \sum_{k = 1}^{|V|}\sum_{i,j \in \mathcal{N}(k)} w_{ij} \|\textbf{R}_k\textbf{e}_{ij} - \textbf{e}_{ij}^\prime\|^2 + \lambda a_k \|\textbf{R}_k \hat{\textbf{n}}_k - \textbf{t}_k\|^2
+&\underset{V^\prime, R}{\text{argmin}} \sum_{k = 1}^{|V|}\sum_{i,j \in \mathcal{N}(k)} w_{ij} \|\textbf{R}_k\textbf{e}_{ij} - \textbf{e}_{ij}^\prime\|^2 + \gamma a_k \|\hat{\textbf{n}}_k^\prime - \textbf{t}_k\|^2 \\
+\approx\:&\underset{V^\prime, R}{\text{argmin}} \sum_{k = 1}^{|V|}\sum_{i,j \in \mathcal{N}(k)} w_{ij} \|\textbf{R}_k\textbf{e}_{ij} - \textbf{e}_{ij}^\prime\|^2 + \gamma a_k \|\textbf{R}_k \hat{\textbf{n}}_k - \textbf{t}_k\|^2
 \end{align*}
 ```
 
@@ -57,7 +57,7 @@ $ pip install -r requirements.txt
 Then, run the program with the following command. **The reference mesh, input mesh, and output mesh must be manifold triangle meshes in .obj format.**
 
 ```bash
-$ main.py [-h] -r REFERENCE_PATH -i INPUT_PATH -o OUTPUT_PATH [-s STRENGTH]
+$ main.py [-h] -r REFERENCE_PATH -i INPUT_PATH -o OUTPUT_PATH [-g GAMMA]
 
 options:
   -h, --help            show this help message and exit
@@ -67,8 +67,8 @@ options:
                         input .obj path
   -o OUTPUT_PATH, --output-path OUTPUT_PATH
                         output .obj path
-  -s STRENGTH, --strength STRENGTH
-                        strength of reference .obj style in output .obj
+  -g GAMMA, --gamma GAMMA
+                        tuning parameter for intensity of stylization
 ```
 
 ## References
@@ -83,8 +83,6 @@ ICS/ACM SIGGRAPH Symposium on Geometry Processing_, pages 109–116, 2007.
 TODO:
 * better Voronoi area approximation
 * mean curvature flow
-* transfer texture coords
-* lock a single vertex
 * standardize $\lambda$?
 * maybe vectorize local step even more?
 -->
