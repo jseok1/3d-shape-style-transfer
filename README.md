@@ -30,7 +30,7 @@ The first condition can be achieved by minimizing the squared Euclidean distance
 The second condition can be achieved by minimizing the as-rigid-as-possible (ARAP) energy, which regularizes the deformation by penalizing non-rigid transformations (i.e., transformations other than rotations and translations). The insight here is that rigid transformations preserve surface details. Again, let $\textbf{v}_k$ and $\textbf{v}_k^\prime$ be the $k$-th vertices in $V$ and $V^\prime$, respectively. Let $\textbf{v}_i$ and $\textbf{v}_j$ be a pair of adjacent vertices in the one-ring neighborhood of $\textbf{v}_k$, and let $\textbf{v}_i^\prime$ and $\textbf{v}_j^\prime$ be the corresponding pair of adjacent vertices in the one-ring neighborhood of $\textbf{v}_k^\prime$. Let $\textbf{e}_{ij} := \textbf{v}_j - \textbf{v}_i$ be the edge between $\textbf{v}_i$ and $\textbf{v}_j$, and let $\textbf{e}_{ij}^\prime := \textbf{v}_j^\prime - \textbf{v}_i^\prime$ be the edge between $\textbf{v}_i^\prime$ and $\textbf{v}_j^\prime$. Let $w_{ij} := \frac{1}{2}(\cot \alpha_{ij} + \cot \beta_{ij})$ be the cotangent weight of $\textbf{e}_{ij}$, where $\alpha_{ij}$ and $\beta_{ij}$ are the angles opposite to $\textbf{e}_{ij}$ in the triangle mesh. Finally, let $\textbf{R}_k$ be the matrix that approximates the rotation by which the one-ring neighborhood of $\textbf{v}_k$ deforms to the one-ring neighborhood of $\textbf{v}_k^\prime$. Then, this condition can be concretely formulated as follows.
 
 ```math
-\argmin_{V^\prime, R} \sum_{k = 1}^{|V|}\sum_{i,j \in \mathcal{N}(k)} w_{ij} \|\textbf{R}_k\textbf{e}_{ij} - \textbf{e}_{ij}^\prime\|^2
+\underset{V^\prime, R}{\text{argmin}} \sum_{k = 1}^{|V|}\sum_{i,j \in \mathcal{N}(k)} w_{ij} \|\textbf{R}_k\textbf{e}_{ij} - \textbf{e}_{ij}^\prime\|^2
 ```
 
 In addition to $V^\prime$, $R := \{\textbf{R}_0, \textbf{R}_1, \ldots, \textbf{R}_{|V|}\}$ must be also optimized.
@@ -39,8 +39,8 @@ Together, these conditions yield the following energy, where $\lambda$ is a para
 
 ```math
 \begin{align*}
-&\argmin_{V^\prime, R} \sum_{k = 1}^{|V|}\sum_{i,j \in \mathcal{N}(k)} w_{ij} \|\textbf{R}_k\textbf{e}_{ij} - \textbf{e}_{ij}^\prime\|^2 + \lambda a_k \|\hat{\textbf{n}}_k^\prime - \textbf{t}_k\|^2 \\
-\approx &\argmin_{V^\prime, R} \sum_{k = 1}^{|V|}\sum_{i,j \in \mathcal{N}(k)} w_{ij} \|\textbf{R}_k\textbf{e}_{ij} - \textbf{e}_{ij}^\prime\|^2 + \lambda a_k \|\textbf{R}_k \hat{\textbf{n}}_k - \textbf{t}_k\|^2
+&\underset{V^\prime, R}{\text{argmin}} \sum_{k = 1}^{|V|}\sum_{i,j \in \mathcal{N}(k)} w_{ij} \|\textbf{R}_k\textbf{e}_{ij} - \textbf{e}_{ij}^\prime\|^2 + \lambda a_k \|\hat{\textbf{n}}_k^\prime - \textbf{t}_k\|^2 \\
+\approx\:&\underset{V^\prime, R}{\text{argmin}} \sum_{k = 1}^{|V|}\sum_{i,j \in \mathcal{N}(k)} w_{ij} \|\textbf{R}_k\textbf{e}_{ij} - \textbf{e}_{ij}^\prime\|^2 + \lambda a_k \|\textbf{R}_k \hat{\textbf{n}}_k - \textbf{t}_k\|^2
 \end{align*}
 ```
 
