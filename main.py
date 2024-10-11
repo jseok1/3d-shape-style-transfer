@@ -1,16 +1,16 @@
 import argparse
 import numpy as np
-from scipy.sparse import csr_array, csc_array, diags, vstack
+from scipy.sparse import csc_array, diags, vstack
 from sksparse.cholmod import cholesky
 from tqdm import tqdm
 
 
 class Stylizer:
   def run(self, reference_path, input_path, output_path, strength):
-    reference_verts, reference_faces = self._load_obj(reference_path)
+    reference_verts, reference_faces, _, _ = self._load_obj(reference_path)
     reference_face_normals = self._calc_face_normals(reference_verts, reference_faces)
 
-    input_verts, input_faces = self._load_obj(input_path)
+    input_verts, input_faces, input_texture_verts, input_texture_faces = self._load_obj(input_path)
     input_face_areas = self._calc_face_areas(input_verts, input_faces)
     input_face_normals = self._calc_face_normals(input_verts, input_faces)
     input_edge_cots = self._calc_edge_cots(input_verts, input_faces)
@@ -30,14 +30,13 @@ class Stylizer:
 
     input_nverts, _ = input_verts.shape
 
-    input_cot_laplacian = csr_array((input_nverts, input_nverts))
+    input_cot_laplacian = csc_array((input_nverts, input_nverts))
     for k in range(input_nverts):
       input_cot_laplacian += (
         input_vert_neighbor_edge_masks[k] @ diags(weights[k]) @ input_vert_neighbor_edge_masks[k].T
       )
     factor = cholesky(input_cot_laplacian, ordering_method="amd")
 
-    # K is a |9V|-by-|3V| matrix stacking the constant terms
     K = vstack(
       [
         csc_array(
@@ -50,7 +49,6 @@ class Stylizer:
       ]
     )
 
-    # 3-by-|3V|
     rotations = np.hstack([np.eye(3)] * input_nverts)
 
     for _ in tqdm(range(20)):
@@ -74,7 +72,7 @@ class Stylizer:
       #   rotations @ K @ output_verts
       # )
 
-    self._save_obj(output_path, output_verts, input_faces)
+    self._save_obj(output_path, output_verts, input_faces, input_texture_verts, input_texture_faces)
 
   def _calc_target_vert_normals(self, reference_face_normals, input_vert_normals):
     input_nverts, _ = input_vert_normals.shape
@@ -115,15 +113,16 @@ class Stylizer:
         ]
       )
 
-      U, _, Vt = np.linalg.svd(
+      U, _, Vh = np.linalg.svd(
         input_vert_neighbor_edges
         @ diags(np.append(weights[k], strength * input_vert_areas[k]))
         @ output_vert_neighbor_edges.T
       )
-      rotation = Vt.T @ U.T
+      V = Vh.T
+      rotation = V @ U.T
       if np.linalg.det(rotation) < 0:
-        Vt[0, :] *= -1
-        rotation = Vt.T @ U.T
+        V[:, 0] *= -1
+        rotation = V @ U.T
       rotations[:, 3 * k : 3 * (k + 1)] = rotation
 
   def _global_step(self, output_verts, rotations, K, factor):
@@ -132,36 +131,65 @@ class Stylizer:
   def _load_obj(self, path):
     verts = []
     faces = []
+    texture_verts = []
+    texture_faces = []
 
     with open(path, "r") as file:
-      for line in file:
+      lines = file.readlines()
+      for line in lines:
         if line.startswith("v "):
-          parts = line.split()
-          x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
-          verts.append([x, y, z])
+          tokens = line.split()
+          verts.append(tokens[1:4])
+
+        elif line.startswith("vt "):
+          tokens = line.split()
+          texture_verts.append(tokens[1:3])
 
         elif line.startswith("f "):
-          parts = line.split()
-          i, j, k = (
-            int(parts[1].split("/")[0]) - 1,
-            int(parts[2].split("/")[0]) - 1,
-            int(parts[3].split("/")[0]) - 1,
-          )
-          faces.append([i, j, k])
+          tokens = [token.split("/") for token in line.split()]
+          faces.append([token[0] for token in tokens[1:4]])
 
-    return np.array(verts), np.array(faces)
+          if len(tokens[1]) > 1 and len(tokens[2]) > 1 and len(tokens[3]) > 1:
+            texture_faces.append([token[1] for token in tokens[1:4]])
 
-  def _save_obj(self, path, verts, faces):
+    verts = np.array(verts, dtype=np.float64)
+    faces = np.array(faces, dtype=np.int64)
+    texture_verts = np.array(texture_verts, dtype=np.float64)
+    texture_faces = np.array(texture_faces, dtype=np.int64)
+
+    faces -= 1
+    texture_faces -= 1
+
+    return verts, faces, texture_verts, texture_faces
+
+  def _save_obj(self, path, verts, faces, texture_verts, texture_faces):
+    nverts, _ = verts.shape
+    nfaces, _ = faces.shape
+    texture_nverts, _ = texture_verts.shape
+    texture_nfaces, _ = texture_faces.shape
+
+    faces += 1
+    texture_faces += 1
+
     lines = []
 
-    for vert in verts:
-      lines.append(f"v {vert[0]} {vert[1]} {vert[2]}")
+    for k in range(nverts):
+      line = f"v {verts[k, 0]} {verts[k, 1]} {verts[k, 2]}\n"
+      lines.append(line)
 
-    for face in faces:
-      lines.append(f"f {face[0] + 1} {face[1] + 1} {face[2] + 1}")
+    for k in range(texture_nverts):
+      line = f"vt {texture_verts[k, 0]} {texture_verts[k, 1]}\n"
+      lines.append(line)
+
+    for k in range(nfaces):
+      if texture_nfaces:
+        line = f"f {faces[k, 0]}/{texture_faces[k, 0]} {faces[k, 1]}/{texture_faces[k, 1]} {faces[k, 2]}/{texture_faces[k, 2]}\n"
+      else:
+        line = f"f {faces[k, 0]} {faces[k, 1]} {faces[k, 2]}\n"
+      lines.append(line)
 
     with open(path, "w") as file:
-      file.write("\n".join(lines))
+      file.writelines(lines)
 
   def _calc_face_areas(self, verts, faces):
     i, j, k = faces[:, 0], faces[:, 1], faces[:, 2]
@@ -188,7 +216,7 @@ class Stylizer:
 
     for k in range(nverts):
       vert_neighbor_face_areas = vert_neighbor_face_masks[k].T @ face_areas
-      vert_areas[k] = np.sum(vert_neighbor_face_areas / 3, axis=0)
+      vert_areas[k] = np.sum(vert_neighbor_face_areas, axis=0) / 3
 
     return vert_areas
 
