@@ -4,8 +4,6 @@ from scipy.sparse import csr_array, csc_array, diags, vstack
 from sksparse.cholmod import cholesky
 from tqdm import tqdm
 
-# ASSUMPTION: MANIFOLD TRIANGLE MESHES
-
 
 class Stylizer:
   def run(self, reference_path, input_path, output_path, strength):
@@ -277,7 +275,15 @@ if __name__ == "__main__":
   parser.add_argument("-r", "--reference-path", type=str, required=True, help="reference .obj path")
   parser.add_argument("-i", "--input-path", type=str, required=True, help="input .obj path")
   parser.add_argument("-o", "--output-path", type=str, required=True, help="output .obj path")
+  parser.add_argument(
+    "-s",
+    "--strength",
+    type=str,
+    required=False,
+    default=1,
+    help="strength of reference .obj style in output .obj",
+  )
   args = parser.parse_args()
 
   stylizer = Stylizer()
-  stylizer.run(args.reference_path, args.input_path, args.output_path, 5)
+  stylizer.run(args.reference_path, args.input_path, args.output_path, args.strength)
