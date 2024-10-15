@@ -1,6 +1,6 @@
 # 3D Shape Style Transfer
 
-[INSERT IMAGE]
+![](README.png)
 
 ## Introduction
 
