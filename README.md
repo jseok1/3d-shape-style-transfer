@@ -79,6 +79,9 @@ Forum_, 40(5):45–55, 2021.
 Olga Sorkine and Marc Alexa. As-Rigid-As-Possible Surface Modeling. In _Proceedings of EUROGRAPH-
 ICS/ACM SIGGRAPH Symposium on Geometry Processing_, pages 109–116, 2007.
 
+Keenan Crane, Ulrich Pinkall, and Peter Schröder. Robust Fairing via Conformal Curvature Flow. _ACM
+Transactions on Graphics (TOG)_, 32(4):1–10, 2013.
+
 <!--
 TODO:
 * better Voronoi area approximation
